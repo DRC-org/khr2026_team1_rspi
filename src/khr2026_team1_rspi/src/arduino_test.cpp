@@ -11,7 +11,6 @@ class ArduinoTest : public rclcpp::Node {
   ArduinoTest() : Node("arduino_test"), count_(0) {
     publisher_ = this->create_publisher<std_msgs::msg::Int32>("topic", 10);
     auto timer_callback = [this]() -> void {
-      // メッセージの型を作成
       auto message = std_msgs::msg::Int32();
       message.data = this->count_++;
 
