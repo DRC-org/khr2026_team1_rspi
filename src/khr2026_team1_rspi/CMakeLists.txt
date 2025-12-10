@@ -10,11 +10,11 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 
-add_executable(arduino_test src/arduino_test.cpp)
-ament_target_dependencies(arduino_test rclcpp std_msgs)
+add_executable(esp32_test src/esp32_test.cpp)
+ament_target_dependencies(esp32_test rclcpp std_msgs)
 
 install(TARGETS
-  arduino_test
+  esp32_test
 DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

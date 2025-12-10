@@ -6,18 +6,18 @@
 
 using namespace std::chrono_literals;
 
-class ArduinoTest : public rclcpp::Node {
+class ESP32Test : public rclcpp::Node {
  public:
-  ArduinoTest() : Node("arduino_test"), count_(0) {
+  ESP32Test() : Node("arduino_test"), count_(0) {
     publisher_ = this->create_publisher<std_msgs::msg::Int32>("topic", 10);
     auto timer_callback = [this]() -> void {
       auto message = std_msgs::msg::Int32();
-      message.data = this->count_++;
+      message.data = this->count_++ % 5 + 1;
 
-      RCLCPP_INFO(this->get_logger(), "Publishing: '%d'", message.data);
+      RCLCPP_INFO(this->get_logger(), "Publishing: %d", message.data);
       this->publisher_->publish(message);
     };
-    timer_ = this->create_wall_timer(500ms, timer_callback);
+    timer_ = this->create_wall_timer(1000ms, timer_callback);
   }
 
  private:
@@ -28,7 +28,7 @@ class ArduinoTest : public rclcpp::Node {
 
 int main(int argc, char* argv[]) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<ArduinoTest>());
+  rclcpp::spin(std::make_shared<ESP32Test>());
   rclcpp::shutdown();
   return 0;
 }
