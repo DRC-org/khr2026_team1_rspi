@@ -8,7 +8,7 @@ using namespace std::chrono_literals;
 
 class ESP32Test : public rclcpp::Node {
  public:
-  ESP32Test() : Node("arduino_test"), count_(0) {
+  ESP32Test() : Node("esp32_test"), count_(0) {
     publisher_ = this->create_publisher<std_msgs::msg::Int32>("topic", 10);
     auto timer_callback = [this]() -> void {
       auto message = std_msgs::msg::Int32();

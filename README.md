@@ -9,14 +9,12 @@ LiDAR や CWMC からのセンサ情報などを収集し、自己位置推定�
 ### 必要なソフトウェア
 
 - VS Code
-- [PlatformIO IDE](https://marketplace.visualstudio.com/items?itemName=platformio.platformio-ide)（VS Code 拡張機能）
 - WSL2
-- Docker
 - ROS 2 Kilted Kaiju（WSL 上にインストール）
 
 ### セットアップ
 
-### 1. WSL2 のセットアップ
+#### 1. WSL2 のセットアップ
 
 WSL2 上に Ubuntu をインストールします。
 
@@ -31,7 +29,7 @@ sudo apt update
 sudo apt upgrade
 ```
 
-### 2. ROS 2 Kilted Kaiju のインストール
+#### 2. ROS 2 Kilted Kaiju のインストール
 
 以下のコマンドをすべて実行し、ROS 2 Kilted Kaiju をインストールします。
 
@@ -48,7 +46,7 @@ source /opt/ros/kilted/setup.bash
 echo -e "\n# ROS 2\nsource /opt/ros/kilted/setup.bash" >> ~/.bashrc
 ```
 
-### 3. Build Essential のインストール
+#### 3. Build Essential のインストール
 
 ```sh
 sudo apt update
