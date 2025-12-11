@@ -52,3 +52,39 @@ echo -e "\n# ROS 2\nsource /opt/ros/kilted/setup.bash" >> ~/.bashrc
 sudo apt update
 sudo apt install build-essential
 ```
+
+## メモ
+
+### uv を使いながら Python のパッケージを作る
+
+#### つくるとき
+
+```sh
+cd src
+ros2 pkg create pkg_name
+cd pkg_name
+uv init . --lib --python-preference only-system
+uv venv --system-site-packages
+```
+
+- `uv init`
+  - `--lib`: ライブラリ形式で初期化する
+  - `--python-preference only-system`: システムの Python を使う
+- `uv venv --system-site-packages`: システムのパッケージを使えるようにする（`rclpy` など）
+
+#### ビルドするとき
+
+```sh
+colcon build --packages-select pkg_name --symlink-install
+```
+
+`--symlink-install` をつけると、シンボリックリンクとしてインストールされるため、ソースファイルの変更をビルドなしで反映できるようになる
+
+#### 実行するとき
+
+```sh
+source install/setup.bash
+cd src/pkg_name
+source .venv/bin/activate
+ros2 run pkg_name file_name.py
+```
