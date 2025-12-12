@@ -1,3 +1,6 @@
 {
-  "cmake.sourceDirectory": "/home/taiga/DRC/khr2026_team1_rspi/src/khr2026_team1_rspi"
+  "cmake.sourceDirectory": "./src/khr2026_team1_rspi",
+  "python.analysis.extraPaths": [
+    "./src/py_test/src"
+  ]
 }
