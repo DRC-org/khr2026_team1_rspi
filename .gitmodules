@@ -1,15 +1,4 @@
-[submodule "src/micro_ros_setup"]
-	path = src/micro_ros_setup
-	url = https://github.com/micro-ROS/micro_ros_setup.git
-	branch = jazzy
-[submodule "src/uros/micro-ROS-Agent"]
-	path = src/uros/micro-ROS-Agent
+[submodule "src/micro_ros_agent"]
+	path = src/micro_ros_agent
 	url = https://github.com/micro-ROS/micro-ROS-Agent.git
 	branch = jazzy
-[submodule "src/uros/micro_ros_msgs"]
-	path = src/uros/micro_ros_msgs
-	url = https://github.com/micro-ROS/micro_ros_msgs.git
-	branch = jazzy
-[submodule "src/uros/drive_base"]
-	path = src/uros/drive_base
-	url = https://github.com/micro-ROS/drive_base.git
