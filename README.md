@@ -53,6 +53,15 @@ sudo apt update
 sudo apt install build-essential
 ```
 
+#### 4. micro_ros_agent のビルド
+
+```sh
+colcon build --packages-up-to micro_ros_agent $@ --cmake-args \
+    "-DUAGENT_BUILD_EXECUTABLE=OFF" \
+    "-DUAGENT_P2P_PROFILE=OFF" \
+    "--no-warn-unused-cli"
+```
+
 ## メモ
 
 ### uv を使いながら Python のパッケージを作る

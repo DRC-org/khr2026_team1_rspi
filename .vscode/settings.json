@@ -1,6 +1,5 @@
 {
-  "cmake.sourceDirectory": "./src/khr2026_team1_rspi",
   "python.analysis.extraPaths": [
-    "./src/py_test/src"
+    "./src/khr2026_team1_rspi/src"
   ]
 }

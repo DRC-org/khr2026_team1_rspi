@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(py_test)
+project(khr2026_team1_rspi)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -14,7 +14,8 @@ find_package(rclpy REQUIRED)
 ament_python_install_package(${PROJECT_NAME} PACKAGE_DIR src/${PROJECT_NAME})
 
 # install python executables
-install(PROGRAMS scripts/publisher.py DESTINATION lib/${PROJECT_NAME})
+file(GLOB PYTHON_SCRIPTS "scripts/*.py")
+install(PROGRAMS ${PYTHON_SCRIPTS} DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
