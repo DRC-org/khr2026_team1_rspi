@@ -10,3 +10,6 @@
 	path = src/uros/micro_ros_msgs
 	url = https://github.com/micro-ROS/micro_ros_msgs.git
 	branch = jazzy
+[submodule "src/uros/drive_base"]
+	path = src/uros/drive_base
+	url = https://github.com/micro-ROS/drive_base.git
