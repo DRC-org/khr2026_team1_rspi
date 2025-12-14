@@ -2,3 +2,6 @@
 	path = src/micro_ros_agent
 	url = https://github.com/micro-ROS/micro-ROS-Agent.git
 	branch = jazzy
+[submodule "src/ydlidar_ros2_driver"]
+	path = src/ydlidar_ros2_driver
+	url = git@github.com:DRC-org/ydlidar_ros2_driver.git
