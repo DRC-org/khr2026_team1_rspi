@@ -1,5 +1,6 @@
 {
   "python.analysis.extraPaths": [
+    "./src/bt_communication/src",
     "./src/khr2026_team1_rspi/src"
   ],
   "cmake.sourceDirectory": "./src/khr2026_team1_rspi"
