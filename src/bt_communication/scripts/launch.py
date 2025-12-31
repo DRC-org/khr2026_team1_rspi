@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from bt_communication.bluetooth import main
+from bt_communication import main
 
 if __name__ == "__main__":
     main()

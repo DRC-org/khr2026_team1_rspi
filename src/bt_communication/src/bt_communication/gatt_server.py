@@ -3,29 +3,19 @@ import json
 import logging
 import math
 import random
-import threading
 from typing import Optional
 
-import rclpy
 from bumble.att import Attribute
 from bumble.core import AdvertisingData
 from bumble.device import Device
 from bumble.gatt import Characteristic, CharacteristicValue, Service
 from bumble.hci import Address
 from bumble.transport import open_transport
-from rclpy.node import Node
-from std_msgs.msg import String
 
-logging.basicConfig(level=logging.INFO)
-
-SERVICE_UUID = "845d1d9a-b986-45b8-8b0e-21ee94307983"
-TX_CHARACTERISTIC_UUID = "3ecd3272-0f80-4518-ad58-78aa9af3ec9d"
-RX_CHARACTERISTIC_UUID = "47153006-9eef-45e5-afb7-038ea60ad893"
+from .constants import RX_CHARACTERISTIC_UUID, SERVICE_UUID, TX_CHARACTERISTIC_UUID
 
 
 class BluetoothGATTServer:
-    """Bluetooth GATT Server using Bumble"""
-
     def __init__(self, on_data_received=None):
         self.device: Optional[Device] = None
         self.tx_char: Optional[Characteristic] = None
@@ -204,108 +194,7 @@ class BluetoothGATTServer:
             raise
 
     async def send_data(self, data: str):
-        """Send data to connected clients"""
         if self.tx_char and self.device:
             self.tx_char.value = data.encode("utf-8")
             await self.device.notify_subscribers(self.tx_char)
             self.logger.info(f"Sent to client: {data}")
-
-
-class BluetoothROS2Node(Node):
-    """ROS2 Node for Bluetooth GATT Server"""
-
-    def __init__(self):
-        super().__init__("bluetooth_node")
-
-        # Declare parameters
-        self.declare_parameter("hci_transport", "usb:0")
-        self.declare_parameter("publish_interval", 0.1)  # seconds
-
-        # Get parameters
-        self.hci_transport: str = self.get_parameter("hci_transport").value or "usb:0"
-        self.publish_interval: float = (
-            self.get_parameter("publish_interval").value or 0.1
-        )
-
-        # Create publisher for receiving data from Bluetooth
-        self.rx_publisher = self.create_publisher(String, "bluetooth_rx", 10)
-
-        # Create subscriber for sending data via Bluetooth
-        self.tx_subscriber = self.create_subscription(
-            String, "bluetooth_tx", self.on_tx_message, 10
-        )
-
-        # Bluetooth server
-        self.ble_server: Optional[BluetoothGATTServer] = None
-        self.ble_thread: Optional[threading.Thread] = None
-        self.event_loop: Optional[asyncio.AbstractEventLoop] = None
-
-        self.get_logger().info("Bluetooth ROS2 Node initialized")
-        self.get_logger().info(f"HCI Transport: {self.hci_transport}")
-
-    def start_bluetooth_server(self):
-        """Start Bluetooth server in a separate thread"""
-        self.get_logger().info("Starting Bluetooth server thread...")
-
-        def run_ble_server():
-            """Run Bluetooth server in background thread"""
-            self.event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.event_loop)
-
-            try:
-                self.ble_server = BluetoothGATTServer(
-                    on_data_received=self.on_bluetooth_data_received
-                )
-                self.event_loop.run_until_complete(
-                    self.ble_server.start(self.hci_transport)
-                )
-            except KeyboardInterrupt:
-                self.get_logger().info("Bluetooth server interrupted")
-            except Exception as e:
-                self.get_logger().error(f"Bluetooth server error: {e}")
-            finally:
-                self.event_loop.close()
-
-        self.ble_thread = threading.Thread(target=run_ble_server, daemon=True)
-        self.ble_thread.start()
-        self.get_logger().info("Bluetooth server thread started")
-
-    def on_bluetooth_data_received(self, data: str):
-        """Callback when data is received from Bluetooth"""
-        msg = String()
-        msg.data = data
-        self.rx_publisher.publish(msg)
-        self.get_logger().info(f"Published Bluetooth RX: {data}")
-
-    def on_tx_message(self, msg: String):
-        """Callback when receiving TX message from ROS2"""
-        if self.ble_server and self.event_loop:
-            self.get_logger().info(f"Received TX message: {msg.data}")
-            # Send data via Bluetooth (must use event loop thread)
-            asyncio.run_coroutine_threadsafe(
-                self.ble_server.send_data(msg.data), self.event_loop
-            )
-
-    def destroy_node(self):
-        """Cleanup on node shutdown"""
-        self.get_logger().info("Shutting down Bluetooth node")
-        super().destroy_node()
-
-
-def main(args=None):
-    rclpy.init(args=args)
-
-    node = BluetoothROS2Node()
-    node.start_bluetooth_server()
-
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-if __name__ == "__main__":
-    main()
