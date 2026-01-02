@@ -1,8 +1,7 @@
 [project]
-name = "py-test"
+name = "robot-control"
 version = "0.1.0"
 description = "Add your description here"
-readme = "README.md"
 authors = [
     { name = "Taiga Saito", email = "me@taigasaito.org" }
 ]
@@ -15,7 +14,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "ruff>=0.14.9",
+    "ruff>=0.14.10",
 ]
 
 [tool.ruff]
