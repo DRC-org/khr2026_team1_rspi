@@ -56,7 +56,7 @@ class RobotController(Node):
 
     def send_control_command(self) -> None:
         """
-        ESP32 へ送信するコマンドを作成する
+        ESP32 へコマンドを送信する。50 ms ごとに呼び出される。
         """
 
         command = {

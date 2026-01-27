@@ -1,6 +1,6 @@
 import math
 
-from .constants import M3508_MAX_RPM, WHEEL_RADIUS
+from .constants import GEAR_RATIO, L_X, L_Y, M3508_MAX_RPM, WHEEL_RADIUS
 from .vec2 import Vec2
 
 
@@ -46,12 +46,8 @@ class M3508Controller:
             list[float]: 各モータの目標回転数 [rev/min]
         """
 
-        l_x = 0.1725  # ロボットの中心からタイヤの中心まで（前後方向） [m]
-        l_y = 0.2425  # ロボットの中心からタイヤの中心まで（左右方向） [m]
-        gear_ratio = 19.20320855614973  # モータのギア比
-
-        geometry_factor = l_x + l_y
-        rpm_calc_const = (60 * gear_ratio) / (2 * math.pi * WHEEL_RADIUS)
+        geometry_factor = L_X + L_Y
+        rpm_calc_const = (60 * GEAR_RATIO) / (2 * math.pi * WHEEL_RADIUS)
 
         # 機体の傾きをベクトルに反映
         # TODO: IMU から傾きを取得して反映させる
