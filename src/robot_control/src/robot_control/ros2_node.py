@@ -24,8 +24,7 @@ class RobotController(Node):
         self.m3508_cntl = M3508Controller()
 
         # コマンドを 50 ms ごとに送信する
-        # → デバッグで一時的に 1 秒に変更
-        self.create_timer(1, self.send_control_command)
+        self.create_timer(0.05, self.send_control_command)
 
         self.get_logger().info("Robot Controller Node initialized")
 
