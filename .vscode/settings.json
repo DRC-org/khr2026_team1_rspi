@@ -3,5 +3,6 @@
     "./src/bt_communication/src",
     "./src/robot_control/src"
   ],
-  "cmake.sourceDirectory": "./src/khr2026_team1_rspi"
+  "cmake.sourceDirectory": "./src/khr2026_team1_rspi",
+  "cmake.ignoreCMakeListsMissing": true
 }

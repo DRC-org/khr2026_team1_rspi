@@ -22,6 +22,7 @@ class BluetoothGATTServer:
         self.send_task: Optional[asyncio.Task] = None
         self.on_data_received = on_data_received
         self.logger = logging.getLogger("BluetoothGATTServer")
+        self.connected_clients = set()
 
     async def start(self, hci_transport_uri: str = "usb:0"):
         """Start the Bluetooth GATT server"""
@@ -86,28 +87,43 @@ class BluetoothGATTServer:
             service = Service(SERVICE_UUID, [self.tx_char, rx_char])
             self.device.add_service(service)
 
-            # Connection handlers
-            def on_connection(connection):
-                self.logger.info(f"Client connected: {connection}")
-                connection.on("disconnection", on_disconnection)
-                self.send_task = asyncio.create_task(self._send_messages_periodically())
-
-            def on_disconnection(connection):
-                self.logger.info(f"Client disconnected: {connection}")
-                if self.send_task and not self.send_task.done():
-                    self.send_task.cancel()
-                self.send_task = None
-
-            self.device.on("connection", on_connection)
-            self.device.on("disconnection", on_disconnection)
-
-            self.logger.info(f"Server started: {self.device.name}")
-            await self.device.power_on()
-
             # Create advertising data
             advertising_data = AdvertisingData(
                 [(AdvertisingData.COMPLETE_LOCAL_NAME, bytes(target_name, "utf-8"))]
             )
+
+            # Connection handlers
+            async def on_connection(connection):
+                self.logger.info(f"Client connected: {connection}")
+                self.connected_clients.add(connection)
+
+                def on_disconnect(reason):
+                    self.logger.info(
+                        f"Client disconnected: {connection} reason: {reason}"
+                    )
+                    self.connected_clients.discard(connection)
+                    if not self.connected_clients:
+                        if self.send_task and not self.send_task.done():
+                            self.send_task.cancel()
+                        self.send_task = None
+
+                connection.on("disconnection", on_disconnect)
+
+                if self.send_task is None or self.send_task.done():
+                    self.send_task = asyncio.create_task(
+                        self._send_messages_periodically()
+                    )
+
+                # 2 台目以降も接続できるようにアドバタイズを再開
+                if self.device:
+                    await self.device.start_advertising(
+                        advertising_data=bytes(advertising_data), auto_restart=True
+                    )
+
+            self.device.on("connection", on_connection)
+
+            self.logger.info(f"Server started: {self.device.name}")
+            await self.device.power_on()
 
             await self.device.start_advertising(
                 advertising_data=bytes(advertising_data), auto_restart=True
@@ -187,7 +203,7 @@ class BluetoothGATTServer:
                     self.tx_char.value = message
                 if self.device and self.tx_char:
                     await self.device.notify_subscribers(self.tx_char)
-                self.logger.info(f"Sent: {message.decode('utf-8')}")
+                # self.logger.info(f"Sent: {message.decode('utf-8')}")
                 await asyncio.sleep(0.1)  # 100ms interval
         except asyncio.CancelledError:
             self.logger.info("Stopped sending messages")
