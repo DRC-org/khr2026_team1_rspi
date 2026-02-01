@@ -22,7 +22,7 @@ class BluetoothGATTServer:
         self.send_task: Optional[asyncio.Task] = None
         self.on_data_received = on_data_received
         self.logger = logging.getLogger("BluetoothGATTServer")
-        self.connected_clients = set()
+        self.connected_clients = {}  # Connection -> properties dict
 
     async def start(self, hci_transport_uri: str = "usb:0"):
         """Start the Bluetooth GATT server"""
@@ -56,6 +56,21 @@ class BluetoothGATTServer:
                 try:
                     text = value.decode("utf-8")
                     self.logger.info(f"Received write from client: {text}")
+                    try:
+                        data = json.loads(text)
+                        if (
+                            isinstance(data, dict)
+                            and connection in self.connected_clients
+                        ):
+                            c_type = data.get("controller_type")
+                            if c_type:
+                                self.connected_clients[connection]["type"] = c_type
+                                self.logger.info(
+                                    f"Client {connection} type set to: {c_type}"
+                                )
+                    except json.JSONDecodeError:
+                        pass
+
                     if self.on_data_received:
                         self.on_data_received(text)
                 except Exception as e:
@@ -95,13 +110,15 @@ class BluetoothGATTServer:
             # Connection handlers
             async def on_connection(connection):
                 self.logger.info(f"Client connected: {connection}")
-                self.connected_clients.add(connection)
+                self.connected_clients[connection] = {}
 
                 def on_disconnect(reason):
                     self.logger.info(
                         f"Client disconnected: {connection} reason: {reason}"
                     )
-                    self.connected_clients.discard(connection)
+                    if connection in self.connected_clients:
+                        del self.connected_clients[connection]
+
                     if not self.connected_clients:
                         if self.send_task and not self.send_task.done():
                             self.send_task.cancel()
@@ -201,8 +218,20 @@ class BluetoothGATTServer:
                 message = json.dumps(data).encode("utf-8")
                 if self.tx_char:
                     self.tx_char.value = message
+
                 if self.device and self.tx_char:
-                    await self.device.notify_subscribers(self.tx_char)
+                    # type が controller のクライアントにのみ送信
+                    for connection, props in list(self.connected_clients.items()):
+                        if props.get("type") == "controller":
+                            try:
+                                await self.device.notify_subscriber(
+                                    connection, self.tx_char, message
+                                )
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"Failed to send to {connection}: {e}"
+                                )
+
                 # self.logger.info(f"Sent: {message.decode('utf-8')}")
                 await asyncio.sleep(0.1)  # 100ms interval
         except asyncio.CancelledError:
@@ -210,6 +239,7 @@ class BluetoothGATTServer:
             raise
 
     async def send_data(self, data: str):
+        # TODO: 送信するデバイスタイプを選択できるようにする
         if self.tx_char and self.device:
             self.tx_char.value = data.encode("utf-8")
             await self.device.notify_subscribers(self.tx_char)
