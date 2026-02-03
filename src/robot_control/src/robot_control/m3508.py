@@ -57,9 +57,9 @@ class M3508Controller:
 
         # 逆運動学方程式
         v_fl = vx - vy - geometry_factor * omega
-        v_fr = vx + vy + geometry_factor * omega
+        v_fr = -(vx + vy + geometry_factor * omega)
         v_rl = vx + vy - geometry_factor * omega
-        v_rr = vx - vy + geometry_factor * omega
+        v_rr = -(vx - vy + geometry_factor * omega)
 
         raw_velocities = [v_fl, v_fr, v_rl, v_rr]
 
