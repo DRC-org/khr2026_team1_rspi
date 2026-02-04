@@ -17,6 +17,21 @@ ament_python_install_package(${PROJECT_NAME} PACKAGE_DIR src/${PROJECT_NAME})
 file(GLOB PYTHON_SCRIPTS "scripts/*.py")
 install(PROGRAMS ${PYTHON_SCRIPTS} DESTINATION lib/${PROJECT_NAME})
 
+# install launch files
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# install config files
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# install rviz files
+install(DIRECTORY rviz
+  DESTINATION share/${PROJECT_NAME}
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
