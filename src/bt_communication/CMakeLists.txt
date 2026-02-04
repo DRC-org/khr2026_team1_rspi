@@ -14,7 +14,7 @@ find_package(rclpy REQUIRED)
 ament_python_install_package(${PROJECT_NAME} PACKAGE_DIR src/${PROJECT_NAME})
 
 # install python executables
-file(GLOB PYTHON_SCRIPTS "scripts/*.py")
+file(GLOB PYTHON_SCRIPTS "scripts/*")
 install(PROGRAMS ${PYTHON_SCRIPTS} DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

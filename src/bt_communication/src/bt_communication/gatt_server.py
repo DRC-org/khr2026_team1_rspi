@@ -107,7 +107,7 @@ class BluetoothGATTServer:
                 [(AdvertisingData.COMPLETE_LOCAL_NAME, bytes(target_name, "utf-8"))]
             )
 
-            # Connection handlers
+                # Connection handlers
             async def on_connection(connection):
                 self.logger.info(f"Client connected: {connection}")
                 self.connected_clients[connection] = {}
@@ -119,17 +119,7 @@ class BluetoothGATTServer:
                     if connection in self.connected_clients:
                         del self.connected_clients[connection]
 
-                    if not self.connected_clients:
-                        if self.send_task and not self.send_task.done():
-                            self.send_task.cancel()
-                        self.send_task = None
-
                 connection.on("disconnection", on_disconnect)
-
-                if self.send_task is None or self.send_task.done():
-                    self.send_task = asyncio.create_task(
-                        self._send_messages_periodically()
-                    )
 
                 # 2 台目以降も接続できるようにアドバタイズを再開
                 if self.device:
@@ -151,96 +141,23 @@ class BluetoothGATTServer:
             # Keep server running
             await asyncio.get_running_loop().create_future()
 
-    async def _send_messages_periodically(self):
-        """Send robot position data every 100ms"""
-        # Define waypoints for smooth path
-        waypoints = [
-            (388, 388),
-            (388, 6500),
-            (1100, 6500),
-            (1100, 1400),
-            (1900, 1400),
-            (1900, 6500),
-            (2500, 6500),
-            (2500, 388),
-            (388, 388),
-        ]
-
-        def distance(p1, p2):
-            return math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
-
-        def interpolate_path(waypoints, progress):
-            """Interpolate position along waypoints. progress: 0.0 to 1.0"""
-            distances = [0.0]
-            for i in range(len(waypoints) - 1):
-                distances.append(
-                    distances[-1] + distance(waypoints[i], waypoints[i + 1])
-                )
-
-            total_distance = distances[-1]
-            target_distance = progress * total_distance
-
-            for i in range(len(distances) - 1):
-                if distances[i] <= target_distance <= distances[i + 1]:
-                    segment_progress = (
-                        (target_distance - distances[i])
-                        / (distances[i + 1] - distances[i])
-                        if distances[i + 1] != distances[i]
-                        else 0
-                    )
-                    p1 = waypoints[i]
-                    p2 = waypoints[i + 1]
-                    x = p1[0] + segment_progress * (p2[0] - p1[0])
-                    y = p1[1] + segment_progress * (p2[1] - p1[1])
-                    return x, y
-
-            return waypoints[-1]
-
-        message_counter = 0
-        try:
-            while True:
-                message_counter += 1
-
-                # Calculate position along the path
-                progress = (message_counter % 200) / 200.0
-                x, y = interpolate_path(waypoints, progress)
-
-                # Calculate angle
-                angle = 15 * math.sin(2 * math.pi * message_counter / 40)
-
-                # Create JSON message
-                data = {
-                    "type": "robot_pos",
-                    "x": round(x, 2),
-                    "y": round(y, 2),
-                    "angle": round(angle, 2),
-                }
-                message = json.dumps(data).encode("utf-8")
-                if self.tx_char:
-                    self.tx_char.value = message
-
-                if self.device and self.tx_char:
-                    # type が controller のクライアントにのみ送信
-                    for connection, props in list(self.connected_clients.items()):
-                        if props.get("type") == "controller":
-                            try:
-                                await self.device.notify_subscriber(
-                                    connection, self.tx_char, message
-                                )
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"Failed to send to {connection}: {e}"
-                                )
-
-                # self.logger.info(f"Sent: {message.decode('utf-8')}")
-                await asyncio.sleep(0.1)  # 100ms interval
-        except asyncio.CancelledError:
-            self.logger.info("Stopped sending messages")
-            raise
-
     async def send_data(self, data: str):
         # TODO: 送信するデバイスタイプを選択できるようにする
         if self.tx_char and self.device:
             self.tx_char.value = data.encode("utf-8")
-            await self.device.notify_subscribers(self.tx_char)
-            self.logger.info(f"Sent to client: {data}")
+            
+            # Notify all connected controller clients
+            if self.device:
+                for connection, props in list(self.connected_clients.items()):
+                    if props.get("type") == "controller":
+                        try:
+                            await self.device.notify_subscriber(
+                                connection, self.tx_char, self.tx_char.value
+                            )
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Failed to send to {connection}: {e}"
+                            )
+            # self.logger.info(f"Sent to client: {data}")
+
+

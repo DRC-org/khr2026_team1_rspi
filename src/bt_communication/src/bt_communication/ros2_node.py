@@ -1,9 +1,11 @@
 import asyncio
+import json
 import threading
 from typing import Optional
 
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from std_msgs.msg import String
 
 from .gatt_server import BluetoothGATTServer
 
@@ -14,20 +16,16 @@ class BluetoothROS2Node(Node):
 
         # Declare parameters
         self.declare_parameter("hci_transport", "usb:0")
-        self.declare_parameter("publish_interval", 0.1)  # seconds
 
         # Get parameters
         self.hci_transport: str = self.get_parameter("hci_transport").value or "usb:0"
-        self.publish_interval: float = (
-            self.get_parameter("publish_interval").value or 0.1
-        )
 
-        # Create publisher for receiving data from Bluetooth
-        self.rx_publisher = self.create_publisher(String, "bluetooth_rx", 10)
+        # Publisher: Send commands to robot (cmd_vel)
+        self.cmd_vel_publisher = self.create_publisher(Twist, "cmd_vel", 10)
 
-        # Create subscriber for sending data via Bluetooth
-        self.tx_subscriber = self.create_subscription(
-            String, "bluetooth_tx", self.on_tx_message, 10
+        # Subscriber: Receive robot status (odom)
+        self.odom_subscriber = self.create_subscription(
+            Odometry, "odom", self.on_odom_received, 10
         )
 
         # Bluetooth server
@@ -65,19 +63,47 @@ class BluetoothROS2Node(Node):
         self.ble_thread.start()
         self.get_logger().info("Bluetooth server thread started")
 
-    def on_bluetooth_data_received(self, data: str):
-        msg = String()
-        msg.data = data
-        self.rx_publisher.publish(msg)
-        self.get_logger().info(f"Published Bluetooth RX: {data}")
+    def on_bluetooth_data_received(self, data_str: str):
+        """Handle data received from Bluetooth client (JSON) -> Publish to cmd_vel"""
+        try:
+            # Expected JSON: {"vx": 0.5, "vy": 0.0, "omega": 0.1}
+            data = json.loads(data_str)
+            
+            twist = Twist()
+            # Safety checks and get values with defaults
+            twist.linear.x = float(data.get("vx", 0.0))
+            twist.linear.y = float(data.get("vy", 0.0))
+            twist.angular.z = float(data.get("omega", 0.0))
 
-    def on_tx_message(self, msg: String):
+            self.cmd_vel_publisher.publish(twist)
+            # self.get_logger().debug(f"Published cmd_vel: {twist}")
+
+        except json.JSONDecodeError:
+            self.get_logger().warning(f"Invalid JSON received: {data_str}")
+        except Exception as e:
+            self.get_logger().error(f"Error processing bluetooth data: {e}")
+
+    def on_odom_received(self, msg: Odometry):
+        """Handle odometry data -> Send to Bluetooth client"""
         if self.ble_server and self.event_loop:
-            self.get_logger().info(f"Received TX message: {msg.data}")
-            # Send data via Bluetooth (must use event loop thread)
-            asyncio.run_coroutine_threadsafe(
-                self.ble_server.send_data(msg.data), self.event_loop
-            )
+            try:
+                # Create simple JSON for visualization
+                # Note: sending minimal data to keep bandwidth low
+                response = {
+                    "type": "robot_pos",
+                    "x": round(msg.pose.pose.position.x, 3),
+                    "y": round(msg.pose.pose.position.y, 3),
+                    # Simplified: using z-component of angular velocity or quaternion conversion if needed
+                    # For visualization, position is most important
+                }
+                
+                # Send asynchronously
+                json_str = json.dumps(response)
+                asyncio.run_coroutine_threadsafe(
+                    self.ble_server.send_data(json_str), self.event_loop
+                )
+            except Exception as e:
+                self.get_logger().warning(f"Failed to send odom to BLE: {e}")
 
     def destroy_node(self):
         self.get_logger().info("Shutting down Bluetooth node")
