@@ -53,7 +53,7 @@ class M3508Controller:
         # TODO: IMU から傾きを取得して反映させる
         rotated_velocity = velocity.rotate(0.0)
         vx = rotated_velocity.x  # 前後方向の速度 [m/s]
-        vy = rotated_velocity.y  # 左右方向の速度 [m/s]
+        vy = -rotated_velocity.y  # 左右方向の速度 [m/s]
 
         # 逆運動学方程式
         v_fl = vx - vy - geometry_factor * omega

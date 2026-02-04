@@ -31,6 +31,8 @@ class RobotController(Node):
     def on_robot_feedback(self, msg: String) -> None:
         self.get_logger().info(f"Received feedback: {msg.data}")
 
+        self.publisher.publish(msg)
+
     def on_controller_command(self, msg: String) -> None:
         self.get_logger().info(f"Received controller command: {msg.data}")
 
