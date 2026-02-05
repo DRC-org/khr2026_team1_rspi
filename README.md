@@ -29,9 +29,9 @@ sudo apt update
 sudo apt upgrade
 ```
 
-#### 2. ROS 2 Kilted Kaiju のインストール
+#### 2. ROS 2 Jazzy のインストール
 
-以下のコマンドをすべて実行し、ROS 2 Kilted Kaiju をインストールします。
+以下のコマンドをすべて実行し、ROS 2 Jazzy をインストールします。
 
 ```sh
 sudo apt install software-properties-common
@@ -41,9 +41,9 @@ curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-a
 sudo dpkg -i /tmp/ros2-apt-source.deb
 sudo apt update && sudo apt install ros-dev-tools
 sudo apt update
-sudo apt install ros-kilted-desktop
-source /opt/ros/kilted/setup.bash
-echo -e "\n# ROS 2\nsource /opt/ros/kilted/setup.bash" >> ~/.bashrc
+sudo apt install ros-jazzy-desktop
+source /opt/ros/jazzy/setup.bash
+echo -e "\n# ROS 2\nsource /opt/ros/jazzy/setup.bash" >> ~/.bashrc
 ```
 
 #### 3. Build Essential のインストール
@@ -53,13 +53,67 @@ sudo apt update
 sudo apt install build-essential
 ```
 
-#### 4. micro_ros_agent のビルド
+#### 4. Git submodule の初期化
 
 ```sh
-colcon build --packages-up-to micro_ros_agent $@ --cmake-args \
-    "-DUAGENT_BUILD_EXECUTABLE=OFF" \
-    "-DUAGENT_P2P_PROFILE=OFF" \
-    "--no-warn-unused-cli"
+git submodule update --init --recursive
+```
+
+#### 5. Navigation2 のインストール
+
+```sh
+sudo apt-get update
+sudo apt-get install -y \
+  ros-jazzy-nav2-controller \
+  ros-jazzy-nav2-planner \
+  ros-jazzy-nav2-behaviors \
+  ros-jazzy-nav2-bt-navigator \
+  ros-jazzy-nav2-waypoint-follower \
+  ros-jazzy-nav2-map-server \
+  ros-jazzy-nav2-amcl \
+  ros-jazzy-nav2-lifecycle-manager
+```
+
+#### 6. rosdep で依存関係をインストール
+
+```sh
+rosdep install -q -y -r --from-paths src --ignore-src
+```
+
+#### 7. ワークスペースのビルド
+
+```sh
+# 外部パッケージをビルド（symlink-install なし）
+colcon build --packages-select slam_toolbox micro_ros_agent
+
+# 内部パッケージをビルド（symlink-install あり）
+colcon build --symlink-install --packages-select bt_communication robot_control ydlidar_ros2_driver
+```
+
+#### 8. 環境のセットアップ
+
+```sh
+source install/setup.bash
+```
+
+## 実行
+
+### ロボットの起動
+
+```sh
+source install/setup.bash
+ros2 launch robot_control robot_bringup.launch.py
+```
+
+#### Launch 引数
+
+- `use_sim_time`: シミュレーション（Gazebo）の時計を使用するかどうか（デフォルト: `false`）
+- `map_mode`: 静的マップ（AMCL）を使用するかどうか（`true`）、または SLAM（マッピング）を使用するかどうか（`false`）（デフォルト: `true`）
+
+例：SLAM モードで起動
+
+```sh
+ros2 launch robot_control robot_bringup.launch.py map_mode:=false
 ```
 
 ## メモ

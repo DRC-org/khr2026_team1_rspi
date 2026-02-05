@@ -5,3 +5,7 @@
 [submodule "src/ydlidar_ros2_driver"]
 	path = src/ydlidar_ros2_driver
 	url = git@github.com:DRC-org/ydlidar_ros2_driver.git
+[submodule "src/slam_toolbox"]
+	path = src/slam_toolbox
+	url = https://github.com/SteveMacenski/slam_toolbox
+	branch = jazzy
