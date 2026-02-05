@@ -24,15 +24,21 @@ class RobotController(Node):
 
         self.m3508_cntl = M3508Controller()
 
+        # フィードバック用のバッファ（最新のメッセージを保持）
+        self.feedback_buffer = None
+
         # コマンドを 50 ms ごとに送信する
         self.create_timer(0.05, self.send_control_command)
+        # フィードバックを 100 ms ごとに送信する
+        self.create_timer(0.1, self.send_feedback)
 
         self.get_logger().info("Robot Controller Node initialized")
 
     def on_robot_feedback(self, msg: String) -> None:
         self.get_logger().info(f"Received feedback: {msg.data}")
 
-        self.publisher_feedback.publish(msg)
+        # 最新のフィードバックをバッファに保存
+        self.feedback_buffer = msg
 
     def on_controller_command(self, msg: String) -> None:
         self.get_logger().info(f"Received controller command: {msg.data}")
@@ -56,6 +62,14 @@ class RobotController(Node):
 
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse JSON: {e}")
+
+    def send_feedback(self) -> None:
+        """
+        フィードバックを送信する。100 ms ごとに呼び出される。
+        """
+        if self.feedback_buffer is not None:
+            self.publisher_feedback.publish(self.feedback_buffer)
+            self.feedback_buffer = None
 
     def send_control_command(self) -> None:
         """
