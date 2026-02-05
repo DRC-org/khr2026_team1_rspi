@@ -13,7 +13,8 @@ class RobotController(Node):
     def __init__(self):
         super().__init__("robot_control_node")
 
-        self.publisher = self.create_publisher(String, "robot_control", 10)
+        self.publisher_control = self.create_publisher(String, "robot_control", 10)
+        self.publisher_feedback = self.create_publisher(String, "bluetooth_tx", 10)
         self.subscriber_feedback = self.create_subscription(
             String, "robot_feedback", self.on_robot_feedback, 10
         )
@@ -31,7 +32,7 @@ class RobotController(Node):
     def on_robot_feedback(self, msg: String) -> None:
         self.get_logger().info(f"Received feedback: {msg.data}")
 
-        self.publisher.publish(msg)
+        self.publisher_feedback.publish(msg)
 
     def on_controller_command(self, msg: String) -> None:
         self.get_logger().info(f"Received controller command: {msg.data}")
@@ -72,5 +73,5 @@ class RobotController(Node):
 
         msg = String()
         msg.data = json.dumps(command)
-        self.publisher.publish(msg)
+        self.publisher_control.publish(msg)
         self.get_logger().info(f"Sent control command: {msg.data}")
