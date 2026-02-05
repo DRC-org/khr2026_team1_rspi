@@ -70,7 +70,7 @@ Visualization Manager:
       Size (m): 0.05999999865889549
       Style: Flat Squares
       Topic:
-        Depth: 5
+        Depth: 10
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Best Effort

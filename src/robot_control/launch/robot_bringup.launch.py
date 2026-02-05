@@ -58,6 +58,16 @@ def generate_launch_description():
         output="screen",
     )
 
+    # Static Transform Publisher (odom -> base_link)
+    # This provides the missing link in the TF tree
+    # In the future, this should be replaced by actual odometry from encoders/IMU
+    tf_odom_base = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=["0", "0", "0", "0", "0", "0", "odom", "base_link"],
+        output="screen",
+    )
+
     # Temporary static TF (map -> odom) until AMCL initializes
     # AMCL will override this once initial pose is set
     tf_map_odom = Node(
@@ -150,7 +160,11 @@ def generate_launch_description():
         executable="map_server",
         name="map_server",
         output="screen",
-        parameters=[{"yaml_filename": map_file_path}, {"use_sim_time": use_sim_time}],
+        parameters=[
+            nav2_params_path,
+            {"yaml_filename": map_file_path},
+            {"use_sim_time": use_sim_time},
+        ],
         condition=IfCondition(map_mode),
     )
 
@@ -220,6 +234,7 @@ def generate_launch_description():
             declare_use_sim_time,
             declare_map_mode,
             tf_base_laser,
+            tf_odom_base,
             tf_map_odom,
             ydlidar_launch,
             bt_node,
