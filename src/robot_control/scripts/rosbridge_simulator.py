@@ -224,7 +224,29 @@ class ROSBridgeSimulator:
                 }
             }
             
+            # Publish Twist (cmd_vel) simulation
+            # Moving if remaining distance > step
+            current_speed = 0.0
+            if current_path_ids and target_idx < len(current_path_ids):
+                 # Recalculate distance to check if moving
+                 spots = self.current_path['spots']
+                 target = spots[current_path_ids[target_idx]]
+                 dx = target['x'] - current_pos[0]
+                 dy = target['y'] - current_pos[1]
+                 if math.sqrt(dx*dx + dy*dy) > speed * dt:
+                     current_speed = speed
+
+            twist_msg = {
+                "op": "publish",
+                "topic": "/cmd_vel",
+                "msg": {
+                    "linear": { "x": current_speed, "y": 0.0, "z": 0.0 },
+                    "angular": { "x": 0.0, "y": 0.0, "z": 0.0 }
+                }
+            }
+            
             message_str = json.dumps(msg)
+            twist_str = json.dumps(twist_msg)
             
             # Broadcast to all clients
             if self.clients:
@@ -233,6 +255,7 @@ class ROSBridgeSimulator:
                 if clients_copy:
                     await asyncio.gather(
                         *[client.send(message_str) for client in clients_copy],
+                        *[client.send(twist_str) for client in clients_copy],
                         return_exceptions=True
                     )
             
