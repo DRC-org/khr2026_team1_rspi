@@ -45,4 +45,11 @@ build
 install
 log
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
 src/YDLidar-SDK
