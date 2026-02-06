@@ -15,37 +15,45 @@ except ImportError:
 
 class TaskOptimizer:
     def __init__(self):
-        # 1. 座標定義 (SVGフィールドから実測した座標 - メートル単位)
-        # SVG -> Field変換: 7.0m / 185.208mm ≈ 0.0378 m/mm
+        # 自動ロボット前提: 王手条件「3つの櫓にリング2個以上」
+        # 陣取りスポットの設定を「リング2個消費」に変更
         self.spots = {
-            # Start (スタートゾーン右下)
-            0: {"name": "Start", "x": 3.2, "y": 0.4, "type": "start", "action_time": 0},
+            # Start (右下隅)
+            0: {"name": "Start", "x": 0.3, "y": 0.5, "type": "start", "action_time": 0},
             
             # --- ターゲット (陣取りゾーン) ---
-            # SVG座標から変換: 陣取りゾーン中心
-            1: {"name": "陣取り_1", "x": 0.34, "y": 1.04, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
-            2: {"name": "陣取り_2", "x": 0.34, "y": 2.10, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
-            3: {"name": "陣取り_3", "x": 0.34, "y": 3.13, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
-            4: {"name": "陣取り_4", "x": 0.34, "y": 4.17, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
+            # 自動ロボット王手条件: 各櫓にリング2個以上
+            # 実機制約: ハンド2つ×2個 = 計4個保持、投下は2個単位（ハンド単位）
+            # req_r: 2 (ルール要件＋実機のハンド投下単位)
+            # score: 58点 = 櫓10 + リング40(20×2) + IN8(4×2)
+            1: {"name": "陣取り_1", "x": 3.15, "y": 2.0, "type": "target", "action_time": 13, "req_y": 1, "req_r": 2, "score": 58, "required_for_vgoal": True},
+            2: {"name": "陣取り_2", "x": 3.15, "y": 3.2, "type": "target", "action_time": 13, "req_y": 1, "req_r": 2, "score": 58, "required_for_vgoal": True},
+            3: {"name": "陣取り_3", "x": 3.15, "y": 4.4, "type": "target", "action_time": 13, "req_y": 1, "req_r": 2, "score": 58, "required_for_vgoal": True},
+            # 最速攻略のため陣取り4は除外（行かないようにする）
+            # 4: {"name": "陣取り_4", "x": 3.15, "y": 5.6, "type": "target", "action_time": 13, "req_y": 1, "req_r": 2, "score": 58, "required_for_vgoal": False},
             
             # --- ターゲット (本丸) ---
-            # SVG座標: cx=6.562mm, cy=148.167mm
-            5: {"name": "本丸", "x": 0.25, "y": 5.61, "type": "honmaru", "action_time": 4, "req_y": 0, "req_r": 1, "score": 120, "required_for_vgoal": True},
+            # 本丸はリング1個でOK（ただし実機は2個単位なので余る）
+            5: {"name": "本丸", "x": 3.25, "y": 1.40, "type": "honmaru", "action_time": 4, "req_y": 0, "req_r": 1, "score": 120, "required_for_vgoal": True},
             
             # --- 補給ポイント (仮想ノード) ---
-            # 櫓取得 - SVG座標: 櫓ゾーン中心
-            101: {"name": "櫓補給_A", "x": 0.54, "y": 5.99, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 20, "required_for_vgoal": False},
-            102: {"name": "櫓補給_B", "x": 0.54, "y": 5.99, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 0, "required_for_vgoal": False},
+            # 複数回補給に行けるように仮想ノードを確保（4個ずつに削減して探索効率化）
+            101: {"name": "櫓補給_A", "x": 2.96, "y": 0.6, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 20, "required_for_vgoal": False},
+            102: {"name": "櫓補給_B", "x": 2.96, "y": 0.6, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 0, "required_for_vgoal": False},
+            103: {"name": "櫓補給_C", "x": 2.96, "y": 0.6, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 0, "required_for_vgoal": False},
+            104: {"name": "櫓補給_D", "x": 2.96, "y": 0.6, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 0, "required_for_vgoal": False},
             
-            # リング取得 - SVG座標: リングゾーン中心
-            201: {"name": "リング補給_A", "x": 2.76, "y": 1.01, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
-            202: {"name": "リング補給_B", "x": 2.76, "y": 1.01, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
+            # リング取得: 右奥 (リングゾーン)
+            201: {"name": "リング補給_A", "x": 0.7, "y": 6.2, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
+            202: {"name": "リング補給_B", "x": 0.7, "y": 6.2, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
+            203: {"name": "リング補給_C", "x": 0.7, "y": 6.2, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
+            204: {"name": "リング補給_D", "x": 0.7, "y": 6.2, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
         }
         
         self.params = {
             "robot_speed": 2.1,         # m/s
-            "max_yagura": 2,            # 櫓同時保持数
-            "max_ring": 4,              # リング同時保持数（ハンド2個 × 2個/ハンド）
+            "max_yagura": 2,            # 櫓同時保持数（実機制約）
+            "max_ring": 4,              # リング同時保持数（実機制約: 2ハンド×2個）
             "jintori_bonus": 30,        # 陣取り達成ボーナス/個
             "vgoal_bonus": 1000,        # 攻略達成ボーナス（評価用）
         }
@@ -122,24 +130,49 @@ class TaskOptimizer:
                 model.Add(y_hold[i] >= req_y).OnlyEnforceIf(x[i, j])
                 model.Add(r_hold[i] >= req_r).OnlyEnforceIf(x[i, j])
                 
-                # 在庫更新: j後の在庫 = i後の在庫 - 消費 + 獲得
-                model.Add(y_hold[j] == y_hold[i] - req_y + gain_y).OnlyEnforceIf(x[i, j])
-                model.Add(r_hold[j] == r_hold[i] - req_r + gain_r).OnlyEnforceIf(x[i, j])
+                # 在庫更新ロジック修正: 上限(=max_hold)でクリップする
+                # j後の在庫 = min(i後の在庫 - 消費 + 獲得, max_hold)
+                
+                # 櫓
+                calc_y = model.NewIntVar(-10, 100, f'calc_y_{i}_{j}')
+                model.Add(calc_y == y_hold[i] - req_y + gain_y).OnlyEnforceIf(x[i, j])
+                
+                max_y_var = model.NewConstant(self.params["max_yagura"])
+                model.AddMinEquality(y_hold[j], [calc_y, max_y_var]).OnlyEnforceIf(x[i, j])
+
+                # リング
+                calc_r = model.NewIntVar(-10, 100, f'calc_r_{i}_{j}')
+                model.Add(calc_r == r_hold[i] - req_r + gain_r).OnlyEnforceIf(x[i, j])
+                
+                max_r_var = model.NewConstant(self.params["max_ring"])
+                model.AddMinEquality(r_hold[j], [calc_r, max_r_var]).OnlyEnforceIf(x[i, j])
 
         # 3. 攻略条件 (本丸)
         honmaru_id = 5
-        targets = [1, 2, 3, 4]
+        targets = [1, 2, 3]
+        
         
         # 王手条件: 3つ以上の陣取り
         # V-Goal狙いなので、ここでは「全ターゲット制圧」を条件とする
-        # 本丸に行くには全ターゲット完了が必要
-        for t in targets:
+        # 手動: 3つ以上、自動: 3つ以上(2個入れ)
+        # 簡易的に、required_for_vgoal=Trueのスポットは全て訪問必須とする
+        pass_vgoal_spots = [visit[i] for i in ids if self.spots[i].get("required_for_vgoal", False)]
+        if pass_vgoal_spots:
+             model.Add(sum(pass_vgoal_spots) == len(pass_vgoal_spots))
+        # V-Goal前提条件となるターゲット（必須ターゲットのみ）
+        # 陣取り4は必須ではないので除外する
+        vgoal_required_targets = [t for t in targets if self.spots[t].get("required_for_vgoal", False)]
+        
+        for t in vgoal_required_targets:
             model.Add(visit[t] == 1).OnlyEnforceIf(visit[honmaru_id])
             model.Add(order[t] < order[honmaru_id]).OnlyEnforceIf(visit[honmaru_id])
 
         # 4. 目的関数 (得点最大化 + 時間最小化)
         SCALE = 10
-        total_time = model.NewIntVar(0, time_limit * SCALE, 'total_time')
+        # ミッション遂行時間の上限は競技時間(3分=180秒) + マージン
+        # time_limit引数は「計算時間」の制限に使うため、ここでは定数を使う
+        MISSION_MAX_TIME = 240
+        total_time = model.NewIntVar(0, MISSION_MAX_TIME * SCALE, 'total_time')
         
         edge_costs = []
         for i in ids:
@@ -153,23 +186,38 @@ class TaskOptimizer:
         model.Add(total_time == sum(edge_costs))
         
         # 得点計算
-        # 各ターゲット訪問に大きな基礎点を与える
-        score_base = sum(visit[i] * (self.spots[i].get("score", 0) + 100) for i in ids if self.spots[i]["type"] in ["target", "honmaru", "supply"])
+        # 各ターゲット訪問に大きな基礎点を与える (補給ポイントには基礎点を与えない)
+        score_base = sum(visit[i] * (self.spots[i].get("score", 0) + 100) for i in ids if self.spots[i]["type"] in ["target", "honmaru"])
+        
+        # 補給ポイントの得点（例：アプローチ点）のみ加算
+        score_supply = sum(visit[i] * self.spots[i].get("score", 0) for i in ids if self.spots[i]["type"] == "supply")
+        
         score_jintori_bonus = sum(visit[t] for t in targets) * self.params["jintori_bonus"]
         score_vgoal = visit[honmaru_id] * self.params["vgoal_bonus"]
         
-        # 訪問数を強く推奨
-        obj_visits = sum(visit[i] for i in ids) * 1000
-        
-        obj_score = score_base + score_jintori_bonus + score_vgoal + obj_visits
-        obj_time_penalty = total_time
+        # 訪問数を強く推奨 -> 削除（無駄な補給立ち寄りを防ぐため）
+        # score_count = sum(visit[i] for i in ids) * 10 
         
         # スコアを大きく重み付けして決定
-        model.Maximize(obj_score * 10 - obj_time_penalty)
+        # 最速王手優先: 時間ペナルティを大きくし、余分なアクション（陣取り4など）を防ぐ
+        # V-Goal達成(必須) >>> 時間短縮 >> 余分なスコア
+        
+        # total_time (秒 * 10)
+        # 1秒短縮 = 10ポイント改善
+        # 陣取り1回 = 58ポイント
+        # 時間ペナルティを重くして、58点稼ぐのに6秒以上かかるなら行かないようにする
+        
+        # 修正:
+        # V-Goalボーナス: 1000 * 100 = 100000 (絶対優先)
+        # 時間ペナルティ: total_time * 20 (1秒=200点相当の重み) 
+        # -> スコア58点稼ぐために0.3秒しか使えない設定 -> 実質寄り道禁止
+        
+        model.Maximize(score_vgoal * 100 + score_jintori_bonus + score_base - total_time * 20)
 
         # Solve
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = 10.0
+        solver.parameters.max_time_in_seconds = float(time_limit)
+        # solver.parameters.log_search_progress = True
         status = solver.Solve(model)
         
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:

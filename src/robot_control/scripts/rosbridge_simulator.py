@@ -126,8 +126,9 @@ class ROSBridgeSimulator:
         while True:
             try:
                 # Compute new path
-                print("\n[Simulator] Computing new path...")
-                path_ids = self.optimizer.solve(start_node=0, time_limit=180)
+                print("[Simulator] Computing new path...")
+                # 計算時間を延ばして、より良い解（無駄のないルート）を探させる
+                path_ids = self.optimizer.solve(start_node=0, time_limit=60)
                 
                 if path_ids:
                     # Prepare path data
@@ -137,7 +138,8 @@ class ROSBridgeSimulator:
                         "timestamp": time.time()
                     }
                     
-                    print(f"[Simulator] Computed path: {[self.optimizer.spots[pid]['name'] for pid in path_ids]}")
+                    path_names = [self.optimizer.spots[pid]["name"] for pid in path_ids]
+                    print(f"[Simulator] Computed path: {path_names}")
                     
                     # Broadcast to all clients
                     await self.send_path_update()
@@ -150,6 +152,92 @@ class ROSBridgeSimulator:
             # Wait before next computation
             await asyncio.sleep(10)
     
+    async def pose_publisher(self):
+        """Simulate robot movement and publish pose"""
+        print("Pose publisher started.")
+        import math
+        
+        # State
+        current_pos = [0.0, 0.0]
+        current_path_ids = []
+        target_idx = 0
+        speed = 2.1 # m/s
+        
+        dt = 0.05 # 20Hz
+        
+        while True:
+            # Check if path updated
+            if self.current_path:
+                new_path_ids = self.current_path['path']
+                
+                # If path changed drastically or reset needed
+                if new_path_ids != current_path_ids:
+                    current_path_ids = new_path_ids
+                    spots = self.current_path['spots']
+                    # Start from the first node (Start)
+                    start_id = current_path_ids[0]
+                    current_pos = [spots[start_id]['x'], spots[start_id]['y']]
+                    target_idx = 1 # Aim for next node
+                    
+                    # Update speed from optimizer params if available
+                    speed = self.optimizer.params.get("robot_speed", 2.1)
+            
+            # Move robot
+            if current_path_ids and target_idx < len(current_path_ids):
+                spots = self.current_path['spots']
+                target_id = current_path_ids[target_idx]
+                target = spots[target_id]
+                tx, ty = target['x'], target['y']
+                
+                cx, cy = current_pos
+                dx = tx - cx
+                dy = ty - cy
+                dist = math.sqrt(dx*dx + dy*dy)
+                
+                step = speed * dt
+                
+                if dist < step:
+                    # Reached target
+                    current_pos = [tx, ty]
+                    target_idx += 1
+                    # Simulate action wait? (Skip for smooth viz)
+                else:
+                    # Move towards target
+                    vx = (dx / dist) * speed
+                    vy = (dy / dist) * speed
+                    current_pos[0] += vx * dt
+                    current_pos[1] += vy * dt
+            
+            # Publish Pose
+            msg = {
+                "op": "publish",
+                "topic": "/robot/pose",
+                "msg": {
+                    "header": {
+                        "frame_id": "map",
+                        "stamp": time.time()
+                    },
+                    "pose": {
+                        "position": {"x": current_pos[0], "y": current_pos[1], "z": 0.0},
+                        "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                    }
+                }
+            }
+            
+            message_str = json.dumps(msg)
+            
+            # Broadcast to all clients
+            if self.clients:
+                # Use a copy of set to avoid runtime error if size changes
+                clients_copy = self.clients.copy()
+                if clients_copy:
+                    await asyncio.gather(
+                        *[client.send(message_str) for client in clients_copy],
+                        return_exceptions=True
+                    )
+            
+            await asyncio.sleep(dt)
+
     async def start(self):
         """Start the WebSocket server"""
         print(f"Starting ROS Bridge Simulator on ws://{self.host}:{self.port}")
@@ -157,6 +245,9 @@ class ROSBridgeSimulator:
         
         # Start path publisher task
         asyncio.create_task(self.path_publisher())
+        
+        # Start pose simulation task
+        asyncio.create_task(self.pose_publisher())
         
         # Start WebSocket server
         async with websockets.serve(
