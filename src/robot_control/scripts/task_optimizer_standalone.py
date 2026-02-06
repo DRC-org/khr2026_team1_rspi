@@ -15,36 +15,31 @@ except ImportError:
 
 class TaskOptimizer:
     def __init__(self):
-        # 1. 座標定義 (ルールブック図面 + SVG解析に基づく推定m単位)
-        # 補給ポイントは複数回訪問可能にするため、仮想ノードとして定義
+        # 1. 座標定義 (SVGフィールドから実測した座標 - メートル単位)
+        # SVG -> Field変換: 7.0m / 185.208mm ≈ 0.0378 m/mm
         self.spots = {
-            # Start
+            # Start (スタートゾーン右下)
             0: {"name": "Start", "x": 3.2, "y": 0.4, "type": "start", "action_time": 0},
             
             # --- ターゲット (陣取りゾーン) ---
-            # ここで「櫓配置(7s)」+「リングIN(4s)」を行う = 11s
-            # 得点内訳: 櫓配置(10) + リングIN櫓(20) + リングIN陣取り(4) = 34点
-            # 陣取り達成ボーナス(30)は別途計算
-            1: {"name": "陣取り_1", "x": 0.4, "y": 1.0, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
-            2: {"name": "陣取り_2", "x": 0.4, "y": 3.0, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
-            3: {"name": "陣取り_3", "x": 0.4, "y": 5.0, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
-            4: {"name": "陣取り_4", "x": 0.4, "y": 6.5, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
+            # SVG座標から変換: 陣取りゾーン中心
+            1: {"name": "陣取り_1", "x": 0.34, "y": 1.04, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
+            2: {"name": "陣取り_2", "x": 0.34, "y": 2.10, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
+            3: {"name": "陣取り_3", "x": 0.34, "y": 3.13, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
+            4: {"name": "陣取り_4", "x": 0.34, "y": 4.17, "type": "target", "action_time": 11, "req_y": 1, "req_r": 1, "score": 34, "required_for_vgoal": True},
             
             # --- ターゲット (本丸) ---
-            # 攻略達成用
-            # 得点内訳: 王手(100) + リングIN(20) = 120点
-            5: {"name": "本丸", "x": 1.75, "y": 6.3, "type": "honmaru", "action_time": 4, "req_y": 0, "req_r": 1, "score": 120, "required_for_vgoal": True},
+            # SVG座標: cx=6.562mm, cy=148.167mm
+            5: {"name": "本丸", "x": 0.25, "y": 5.61, "type": "honmaru", "action_time": 4, "req_y": 0, "req_r": 1, "score": 120, "required_for_vgoal": True},
             
             # --- 補給ポイント (仮想ノード) ---
-            # 櫓取得 (Yagura Pickup) - 一度に2個取得可能 (4s)
-            # 櫓ゾーン進入: 初回のみ20点
-            101: {"name": "櫓補給_A", "x": 0.85, "y": 6.0, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 20, "required_for_vgoal": False},
-            102: {"name": "櫓補給_B", "x": 0.85, "y": 6.0, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 0, "required_for_vgoal": False},
+            # 櫓取得 - SVG座標: 櫓ゾーン中心
+            101: {"name": "櫓補給_A", "x": 0.54, "y": 5.99, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 20, "required_for_vgoal": False},
+            102: {"name": "櫓補給_B", "x": 0.54, "y": 5.99, "type": "supply", "action_time": 4, "gain_y": 2, "gain_r": 0, "score": 0, "required_for_vgoal": False},
             
-            # リング取得 (Ring Pickup) - 一度に4個取得可能 (両ハンドで8s)
-            # 座標: リングゾーン付近
-            201: {"name": "リング補給_A", "x": 2.65, "y": 0.7, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
-            202: {"name": "リング補給_B", "x": 2.65, "y": 0.7, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
+            # リング取得 - SVG座標: リングゾーン中心
+            201: {"name": "リング補給_A", "x": 2.76, "y": 1.01, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
+            202: {"name": "リング補給_B", "x": 2.76, "y": 1.01, "type": "supply", "action_time": 8, "gain_y": 0, "gain_r": 4, "score": 0, "required_for_vgoal": False},
         }
         
         self.params = {
