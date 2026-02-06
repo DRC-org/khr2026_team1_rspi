@@ -44,11 +44,14 @@ class RobotController(Node):
         self.get_logger().info(f"Received controller command: {msg.data}")
 
         try:
-            commands: dict = json.loads(msg.data)
+            commands: list = json.loads(msg.data)
             self.get_logger().info(f"Parsed commands: {commands}")
 
             for command in commands:
-                if "type" in command and command["type"] == "joystick":
+                if "type" not in command:
+                    continue
+
+                if command["type"] == "joystick":
                     l_x = command.get("l_x", 0)
                     l_y = command.get("l_y", 0)
                     r = -int(command.get("r", 0))
@@ -59,6 +62,18 @@ class RobotController(Node):
                         / 10
                         * math.pi,  # 1 秒で半回転を最大にする（最高速度で旋回すると速すぎるため）
                     )
+
+                elif command["type"] == "pid_gains":
+                    # PIDゲインをESP32に転送
+                    kp = max(0.0, min(10.0, command.get("kp", 0.5)))
+                    ki = max(0.0, min(1.0, command.get("ki", 0.05)))
+                    kd = max(0.0, min(1.0, command.get("kd", 0.0)))
+
+                    pid_command = {"pid_gains": {"kp": kp, "ki": ki, "kd": kd}}
+                    pid_msg = String()
+                    pid_msg.data = json.dumps(pid_command)
+                    self.publisher_control.publish(pid_msg)
+                    self.get_logger().info(f"Forwarded PID gains: {pid_msg.data}")
 
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse JSON: {e}")
