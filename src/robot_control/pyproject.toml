@@ -6,7 +6,9 @@ authors = [
     { name = "Taiga Saito", email = "me@taigasaito.org" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "ortools"
+]
 
 [build-system]
 requires = ["uv_build>=0.9.16,<0.10.0"]
