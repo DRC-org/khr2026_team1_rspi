@@ -143,6 +143,8 @@ class ROSBridgeSimulator:
                     
                     # Broadcast to all clients
                     await self.send_path_update()
+                    # Also publish visualization path
+                    await self.publish_viz_path()
                 else:
                     print("[Simulator] No valid path found")
                 
@@ -209,13 +211,17 @@ class ROSBridgeSimulator:
                     current_pos[1] += vy * dt
             
             # Publish Pose
+            now = time.time()
+            sec = int(now)
+            nanosec = int((now - sec) * 1e9)
+            
             msg = {
                 "op": "publish",
                 "topic": "/robot/pose",
                 "msg": {
                     "header": {
                         "frame_id": "map",
-                        "stamp": time.time()
+                        "stamp": { "sec": sec, "nanosec": nanosec }
                     },
                     "pose": {
                         "position": {"x": current_pos[0], "y": current_pos[1], "z": 0.0},
@@ -224,6 +230,30 @@ class ROSBridgeSimulator:
                 }
             }
             
+            # Publish Robot Marker (visualization_msgs/Marker)
+            marker_msg = {
+                "op": "publish",
+                "topic": "/robot/marker",
+                "type": "visualization_msgs/Marker",
+                "msg": {
+                    "header": {
+                        "frame_id": "map",
+                        "stamp": { "sec": sec, "nanosec": nanosec }
+                    },
+                    "ns": "robot_shape",
+                    "id": 0,
+                    "type": 1, # CUBE
+                    "action": 0, # ADD
+                    "pose": {
+                        "position": {"x": current_pos[0], "y": current_pos[1], "z": 0.1},
+                        "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                    },
+                    "scale": {"x": 0.6, "y": 0.5, "z": 0.2}, # Robot size
+                    "color": {"r": 0.0, "g": 0.8, "b": 1.0, "a": 0.8},
+                    "lifetime": { "sec": 0, "nanosec": 0 }
+                }
+            }
+
             # Publish Twist (cmd_vel) simulation
             # Moving if remaining distance > step
             current_speed = 0.0
@@ -246,6 +276,7 @@ class ROSBridgeSimulator:
             }
             
             message_str = json.dumps(msg)
+            marker_str = json.dumps(marker_msg)
             twist_str = json.dumps(twist_msg)
             
             # Broadcast to all clients
@@ -255,11 +286,61 @@ class ROSBridgeSimulator:
                 if clients_copy:
                     await asyncio.gather(
                         *[client.send(message_str) for client in clients_copy],
+                        *[client.send(marker_str) for client in clients_copy],
                         *[client.send(twist_str) for client in clients_copy],
                         return_exceptions=True
                     )
             
             await asyncio.sleep(dt)
+
+    async def publish_viz_path(self):
+        """Publish nav_msgs/Path for Rviz visualization"""
+        if not self.current_path:
+            return
+
+        now = time.time()
+        sec = int(now)
+        nanosec = int((now - sec) * 1e9)
+        
+        spots = self.current_path['spots']
+        path_ids = self.current_path['path']
+        
+        poses = []
+        for pid in path_ids:
+            spot = spots[pid]
+            poses.append({
+                "header": {
+                    "frame_id": "map",
+                    "stamp": { "sec": sec, "nanosec": nanosec }
+                },
+                "pose": {
+                    "position": { "x": spot['x'], "y": spot['y'], "z": 0.0 },
+                    "orientation": { "x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0 }
+                }
+            })
+            
+        path_msg = {
+            "op": "publish",
+            "topic": "/task_planner/path_viz",
+            "type": "nav_msgs/Path",
+            "msg": {
+                "header": {
+                    "frame_id": "map",
+                    "stamp": { "sec": sec, "nanosec": nanosec }
+                },
+                "poses": poses
+            }
+        }
+        
+        path_str = json.dumps(path_msg)
+        
+        if self.clients:
+            clients_copy = self.clients.copy()
+            if clients_copy:
+                await asyncio.gather(
+                    *[client.send(path_str) for client in clients_copy],
+                    return_exceptions=True
+                )
 
     async def start(self):
         """Start the WebSocket server"""
