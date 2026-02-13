@@ -10,12 +10,14 @@ import time
 
 from robot_control.mission_logic.state import GameState, ZoneState
 from robot_control.mission_logic.planner import ActionPlanner
+from robot_control.mission_logic.manager import LogicManager
 
 class MissionControlNode(Node):
     def __init__(self):
         super().__init__('mission_control_node')
         
         self.state = GameState()
+        self.logic = LogicManager(self.state) # Use manager
         self.planner = ActionPlanner()
         self.navigator = BasicNavigator()
         
@@ -31,19 +33,14 @@ class MissionControlNode(Node):
         self.create_timer(1.0, self.control_loop)
         
         self.current_action = None
-        self.is_executing_hardware = False
         self.last_hardware_cmd_time = 0
         
-        self.get_logger().info("Mission Control (Robust Version) Initialized")
+        self.get_logger().info("Mission Control (Production Version) Initialized")
 
     def status_callback(self, msg):
-        """Handle hardware feedback (Action Completed)"""
-        try:
-            data = json.loads(msg.data)
-            self.get_logger().info(f"FEEDBACK: Module {hex(data['id'])} finished action.")
-            # Clear flag to proceed
-            self.is_executing_hardware = False
-        except: pass
+        """Handle hardware feedback via LogicManager"""
+        if self.logic.process_feedback(msg.data):
+            self.get_logger().info("Hardware action confirmed complete.")
 
     def tf_callback(self, msg):
         """Update robot position from TF"""
@@ -53,85 +50,82 @@ class MissionControlNode(Node):
                 self.state.robot_y = transform.transform.translation.y
 
     def score_callback(self, msg):
-        """Update captured zone states from scoring node"""
-        try:
-            data = json.loads(msg.data)
-            # In a real scenario, sync with score node state here
-            pass 
-        except: pass
+        """Update internal GameState via LogicManager"""
+        self.logic.sync_state(msg.data)
 
     def control_loop(self):
-        # 1. Check if moving or executing hardware
+        # 1. Check if busy
         if self.current_action:
             if not self.navigator.isTaskComplete():
-                return # Still navigating to spot
+                return
             
-            # Arrived! Execute hardware action if not started
-            if not self.is_executing_hardware:
+            if not self.logic.is_executing_hardware:
                 if self.last_hardware_cmd_time == 0:
-                    self.get_logger().info(f"Arrived at {self.current_action['name']}. Starting hardware sequence...")
                     self.execute_hardware_sequence(self.current_action)
-                    self.is_executing_hardware = True
+                    # LogicManager will track this action's ID
+                    self.logic.prepare_action(
+                        self.current_action['type'], 
+                        gain_y=self.current_action.get('gain_y', 0),
+                        gain_r=self.current_action.get('gain_r', 0)
+                    )
                     self.last_hardware_cmd_time = time.time()
                 return
 
-            # Wait for feedback or safety timeout (10s)
-            if time.time() - self.last_hardware_cmd_time > 10.0:
-                self.get_logger().warn("Hardware feedback timeout. Proceeding...")
-                self.is_executing_hardware = False
+            # Timeout (15s)
+            if time.time() - self.last_hardware_cmd_time > 15.0:
+                self.get_logger().warn("Hardware timeout. Skipping action...")
+                self.logic.is_executing_hardware = False
+                self.logic.waiting_for_feedback_id = None
 
-            if self.is_executing_hardware:
-                return # Still waiting for action completion
+            if self.logic.is_executing_hardware: return
 
-            # Action complete
-            self.get_logger().info(f"Mission step at {self.current_action['name']} complete.")
+            # Success
             self.update_state_post_action(self.current_action)
             self.current_action = None
-            self.is_executing_hardware = False
             self.last_hardware_cmd_time = 0
             
-        # 2. Plan next move
+        # 2. Plan
         plan = self.planner.plan_mission(self.state)
-        if not plan:
-            return
+        if not plan: return
             
-        # 3. Trigger next navigation
         next_spot = plan[0]
-        self.get_logger().info(f"Next Target: {next_spot['name']}")
+        self.get_logger().info(f"Navigating to: {next_spot['name']}")
         
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = 'map'
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose.position.x = next_spot['x']
-        goal_pose.pose.position.y = next_spot['y']
-        goal_pose.pose.orientation.w = 1.0
+        goal = PoseStamped()
+        goal.header.frame_id = 'map'
+        goal.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.position.x = next_spot['x']
+        goal.pose.position.y = next_spot['y']
+        goal.pose.orientation.w = 1.0
         
-        self.navigator.goToPose(goal_pose)
+        self.navigator.goToPose(goal)
         self.current_action = next_spot
 
     def execute_hardware_sequence(self, action):
-        """Send JSON commands to /robot_control based on spot type"""
-        # Template for both mechanism sets
+        """Send command and set expected feedback ID"""
         control_data = {
-            "yagura": {"1_pos": "stopped", "1_state": "open", "2_pos": "stopped", "2_state": "open"},
-            "ring": {"1_pos": "stopped", "1_state": "open", "2_pos": "stopped", "2_state": "open"}
+            "yagura": {"1_pos": "stopped", "1_state": "open"},
+            "ring": {"1_pos": "stopped", "1_state": "open"}
         }
         
+        # Mapping action to expected feedback ID (based on can.md)
         if action['type'] == 'supply':
             if action.get('gain_y', 0) > 0:
                 control_data["yagura"]["1_pos"] = "down"
                 control_data["yagura"]["1_state"] = "closed"
-            if action.get('gain_r', 0) > 0:
+                self.waiting_for_feedback_id = 0x40 # Yagura Hand 1 Action Done
+            elif action.get('gain_r', 0) > 0:
                 control_data["ring"]["1_pos"] = "pickup"
-                control_data["ring"]["1_state"] = "open" # 把持(開)
+                self.waiting_for_feedback_id = 0x4A # Ring Hand 1 Move Done
         
         elif action['type'] == 'target':
             control_data["yagura"]["1_pos"] = "down"
-            control_data["yagura"]["1_state"] = "open" # リリース(開)
+            control_data["yagura"]["1_state"] = "open"
+            self.waiting_for_feedback_id = 0x40 # Yagura Hand 1 Action Done
             
         elif action['type'] == 'honmaru':
             control_data["ring"]["1_pos"] = "honmaru"
-            control_data["ring"]["1_state"] = "closed" # リリース(閉)
+            self.waiting_for_feedback_id = 0x4A # Ring Hand 1 Move Done
             
         self.control_pub.publish(String(data=json.dumps(control_data)))
 
