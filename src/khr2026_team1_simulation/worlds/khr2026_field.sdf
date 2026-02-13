@@ -1,0 +1,50 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <world name="khr2026_field">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="libignition-gazebo-physics-system.so" name="ignition::gazebo::systems::Physics"></plugin>
+    <plugin filename="libignition-gazebo-user-commands-system.so" name="ignition::gazebo::systems::UserCommands"></plugin>
+    <plugin filename="libignition-gazebo-scene-broadcaster-system.so" name="ignition::gazebo::systems::SceneBroadcaster"></plugin>
+
+    <light type="directional" name="sun">
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>3.5 7.0</size></plane></geometry>
+          <material><ambient>0.0 0.5 0.0 1</ambient><diffuse>0.0 0.5 0.0 1</diffuse></material>
+          <pose>1.75 3.5 0 0 0 0</pose>
+        </visual>
+      </link>
+    </model>
+
+    <model name="yagura_1">
+      <pose>2.8 0.5 0.125 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.057</radius><length>0.25</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.057</radius><length>0.25</length></cylinder></geometry><material><ambient>0.8 0.8 0.8 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="honmaru">
+      <static>true</static>
+      <pose>3.25 1.40 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry><material><ambient>1.0 0.8 0.0 1</ambient></material></visual>
+      </link>
+    </model>
+  </world>
+</sdf>
