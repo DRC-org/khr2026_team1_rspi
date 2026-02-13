@@ -17,7 +17,7 @@ class MissionControlNode(Node):
         super().__init__('mission_control_node')
         
         self.state = GameState()
-        self.logic = LogicManager(self.state) # Use manager
+        self.logic = LogicManager(self.state)
         self.planner = ActionPlanner()
         self.navigator = BasicNavigator()
         
@@ -54,19 +54,32 @@ class MissionControlNode(Node):
         self.logic.sync_state(msg.data)
 
     def control_loop(self):
-        # 1. Check if busy
+        # 1. Check if moving or executing hardware
         if self.current_action:
             if not self.navigator.isTaskComplete():
-                return
+                return # Still navigating to spot
             
+            # Check for Navigation result
+            nav_result = self.navigator.getResult()
+            if nav_result == TaskResult.FAILED:
+                self.get_logger().error(f"Navigation to {self.current_action['name']} FAILED. Replanning...")
+                self.current_action = None
+                return
+            elif nav_result == TaskResult.CANCELED:
+                self.get_logger().warn(f"Navigation to {self.current_action['name']} CANCELED.")
+                self.current_action = None
+                return
+
+            # Arrived! Execute hardware action if not started
             if not self.logic.is_executing_hardware:
                 if self.last_hardware_cmd_time == 0:
+                    self.get_logger().info(f"Arrived at {self.current_action['name']}. Starting hardware sequence...")
                     self.execute_hardware_sequence(self.current_action)
-                    # LogicManager will track this action's ID
                     self.logic.prepare_action(
                         self.current_action['type'], 
                         gain_y=self.current_action.get('gain_y', 0),
-                        gain_r=self.current_action.get('gain_r', 0)
+                        gain_r=self.current_action.get('gain_r', 0),
+                        mech_index=1 
                     )
                     self.last_hardware_cmd_time = time.time()
                 return
@@ -77,9 +90,11 @@ class MissionControlNode(Node):
                 self.logic.is_executing_hardware = False
                 self.logic.waiting_for_feedback_id = None
 
-            if self.logic.is_executing_hardware: return
+            if self.logic.is_executing_hardware:
+                return # Still waiting for module to finish
 
-            # Success
+            # Action complete
+            self.get_logger().info(f"Mission step at {self.current_action['name']} complete.")
             self.update_state_post_action(self.current_action)
             self.current_action = None
             self.last_hardware_cmd_time = 0
@@ -102,35 +117,32 @@ class MissionControlNode(Node):
         self.current_action = next_spot
 
     def execute_hardware_sequence(self, action):
-        """Send command and set expected feedback ID"""
+        """Send JSON commands to /robot_control based on spot type"""
         control_data = {
-            "yagura": {"1_pos": "stopped", "1_state": "open"},
-            "ring": {"1_pos": "stopped", "1_state": "open"}
+            "yagura": {"1_pos": "stopped", "1_state": "open", "2_pos": "stopped", "2_state": "open"},
+            "ring": {"1_pos": "stopped", "1_state": "open", "2_pos": "stopped", "2_state": "open"}
         }
         
-        # Mapping action to expected feedback ID (based on can.md)
         if action['type'] == 'supply':
             if action.get('gain_y', 0) > 0:
                 control_data["yagura"]["1_pos"] = "down"
                 control_data["yagura"]["1_state"] = "closed"
-                self.waiting_for_feedback_id = 0x40 # Yagura Hand 1 Action Done
-            elif action.get('gain_r', 0) > 0:
+            if action.get('gain_r', 0) > 0:
                 control_data["ring"]["1_pos"] = "pickup"
-                self.waiting_for_feedback_id = 0x4A # Ring Hand 1 Move Done
+                control_data["ring"]["1_state"] = "open"
         
         elif action['type'] == 'target':
             control_data["yagura"]["1_pos"] = "down"
             control_data["yagura"]["1_state"] = "open"
-            self.waiting_for_feedback_id = 0x40 # Yagura Hand 1 Action Done
             
         elif action['type'] == 'honmaru':
             control_data["ring"]["1_pos"] = "honmaru"
-            self.waiting_for_feedback_id = 0x4A # Ring Hand 1 Move Done
+            control_data["ring"]["1_state"] = "closed"
             
         self.control_pub.publish(String(data=json.dumps(control_data)))
 
     def update_state_post_action(self, action):
-        """Update internal state prediction after confirmed action"""
+        """Update internal state prediction"""
         if action['type'] == 'supply':
             self.state.held_yagura += action.get('gain_y', 0)
             self.state.held_rings += action.get('gain_r', 0)

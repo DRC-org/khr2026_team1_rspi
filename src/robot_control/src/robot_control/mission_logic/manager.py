@@ -39,13 +39,18 @@ class LogicManager:
         except:
             pass
 
-    def prepare_action(self, action_type: str, gain_y: int = 0, gain_r: int = 0):
-        """Set up flags for an upcoming action"""
+    def prepare_action(self, action_type: str, gain_y: int = 0, gain_r: int = 0, mech_index: int = 1):
+        """Set up flags for an upcoming action, supporting multiple mechanism sets"""
         self.is_executing_hardware = True
+        
         if action_type == 'supply':
-            if gain_y > 0: self.waiting_for_feedback_id = 0x40
-            elif gain_r > 0: self.waiting_for_feedback_id = 0x4A
+            if gain_y > 0:
+                # 0x40 for Hand 1, 0x41 for Hand 2
+                self.waiting_for_feedback_id = 0x40 if mech_index == 1 else 0x41
+            elif gain_r > 0:
+                # 0x4A for Hand 1, 0x4C for Hand 2
+                self.waiting_for_feedback_id = 0x4A if mech_index == 1 else 0x4C
         elif action_type == 'target':
-            self.waiting_for_feedback_id = 0x40
+            self.waiting_for_feedback_id = 0x40 if mech_index == 1 else 0x41
         elif action_type == 'honmaru':
-            self.waiting_for_feedback_id = 0x4A
+            self.waiting_for_feedback_id = 0x4A if mech_index == 1 else 0x4C
