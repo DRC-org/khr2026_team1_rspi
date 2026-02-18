@@ -74,9 +74,11 @@ class BluetoothROS2Node(Node):
     def on_tx_message(self, msg: String):
         if self.ble_server and self.event_loop:
             self.get_logger().info(f"Received TX message: {msg.data}")
-            # Send data via Bluetooth (must use event loop thread)
-            asyncio.run_coroutine_threadsafe(
-                self.ble_server.send_data(msg.data), self.event_loop
+            # Buffer latest data; the BLE event loop's periodic task will send it.
+            # Using call_soon_threadsafe instead of run_coroutine_threadsafe
+            # to prevent coroutine queue buildup that causes growing latency.
+            self.event_loop.call_soon_threadsafe(
+                self.ble_server.set_pending_tx_data, msg.data
             )
 
     def destroy_node(self):

@@ -1,0 +1,18 @@
+# pos
+uint8 POS_PICKUP=0
+uint8 POS_YAGURA=1
+uint8 POS_HONMARU=2
+uint8 POS_STOPPED=3
+uint8 POS_PICKUP_DONE=4
+uint8 POS_YAGURA_DONE=5
+uint8 POS_HONMARU_DONE=6
+
+# state
+uint8 STATE_OPEN=0
+uint8 STATE_CLOSE=1
+uint8 STATE_STOPPED=2
+uint8 STATE_OPEN_DONE=3
+uint8 STATE_CLOSE_DONE=4
+
+uint8 pos
+uint8 state

@@ -1,0 +1,16 @@
+# pos
+uint8 POS_UP=0
+uint8 POS_DOWN=1
+uint8 POS_STOPPED=2
+uint8 POS_UP_DONE=3
+uint8 POS_DOWN_DONE=4
+
+# state
+uint8 STATE_OPEN=0
+uint8 STATE_CLOSE=1
+uint8 STATE_STOPPED=2
+uint8 STATE_OPEN_DONE=3
+uint8 STATE_CLOSE_DONE=4
+
+uint8 pos
+uint8 state

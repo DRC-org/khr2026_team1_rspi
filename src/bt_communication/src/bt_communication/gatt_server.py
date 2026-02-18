@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import math
 import random
 from typing import Optional
 
@@ -23,6 +22,12 @@ class BluetoothGATTServer:
         self.on_data_received = on_data_received
         self.logger = logging.getLogger("BluetoothGATTServer")
         self.connected_clients = {}  # Connection -> properties dict
+        # Buffer for pending TX data (set from ROS thread via call_soon_threadsafe)
+        self._pending_tx_data: Optional[str] = None
+
+    def set_pending_tx_data(self, data: str):
+        """Store latest TX data. Called on event loop via call_soon_threadsafe."""
+        self._pending_tx_data = data
 
     async def start(self, hci_transport_uri: str = "usb:0"):
         """Start the Bluetooth GATT server"""
@@ -152,88 +157,61 @@ class BluetoothGATTServer:
             await asyncio.get_running_loop().create_future()
 
     async def _send_messages_periodically(self):
-        """Send robot position data every 100ms"""
-        # Define waypoints for smooth path
-        waypoints = [
-            (388, 388),
-            (388, 6500),
-            (1100, 6500),
-            (1100, 1400),
-            (1900, 1400),
-            (1900, 6500),
-            (2500, 6500),
-            (2500, 388),
-            (388, 388),
-        ]
+        """Send pending TX data at fixed 100ms intervals.
 
-        def distance(p1, p2):
-            return math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
+        Uses wall-clock scheduling so that notify_subscribers() latency
+        does not add to the interval (previous bug: sleep was ADDED to
+        notify time, giving ~200ms cycles instead of 100ms).
+        """
+        interval = 0.1  # 100ms target
+        loop = asyncio.get_event_loop()
+        next_tick = loop.time() + interval
+        # === DEBUG ===
+        _dbg_count = 0
+        _dbg_total_notify = 0.0
+        _dbg_max_notify = 0.0
+        _dbg_last_log = loop.time()
 
-        def interpolate_path(waypoints, progress):
-            """Interpolate position along waypoints. progress: 0.0 to 1.0"""
-            distances = [0.0]
-            for i in range(len(waypoints) - 1):
-                distances.append(
-                    distances[-1] + distance(waypoints[i], waypoints[i + 1])
-                )
-
-            total_distance = distances[-1]
-            target_distance = progress * total_distance
-
-            for i in range(len(distances) - 1):
-                if distances[i] <= target_distance <= distances[i + 1]:
-                    segment_progress = (
-                        (target_distance - distances[i])
-                        / (distances[i + 1] - distances[i])
-                        if distances[i + 1] != distances[i]
-                        else 0
-                    )
-                    p1 = waypoints[i]
-                    p2 = waypoints[i + 1]
-                    x = p1[0] + segment_progress * (p2[0] - p1[0])
-                    y = p1[1] + segment_progress * (p2[1] - p1[1])
-                    return x, y
-
-            return waypoints[-1]
-
-        message_counter = 0
         try:
             while True:
-                message_counter += 1
+                pending = self._pending_tx_data
+                if pending is not None:
+                    self._pending_tx_data = None
+                    if self.tx_char and self.device:
+                        encoded = pending.encode("utf-8")
+                        self.tx_char.value = encoded
+                        t0 = loop.time()
+                        await self.device.notify_subscribers(self.tx_char)
+                        notify_time = loop.time() - t0
+                        _dbg_count += 1
+                        _dbg_total_notify += notify_time
+                        if notify_time > _dbg_max_notify:
+                            _dbg_max_notify = notify_time
 
-                # Calculate position along the path
-                progress = (message_counter % 200) / 200.0
-                x, y = interpolate_path(waypoints, progress)
+                # === DEBUG: log every 3 seconds ===
+                now = loop.time()
+                if now - _dbg_last_log > 3.0:
+                    if _dbg_count > 0:
+                        self.logger.info(
+                            f"[BLE TX DEBUG] {_dbg_count} notifs in 3s "
+                            f"({_dbg_count / 3:.1f}/s) | "
+                            f"notify avg={_dbg_total_notify / _dbg_count * 1000:.1f}ms "
+                            f"max={_dbg_max_notify * 1000:.1f}ms"
+                        )
+                    _dbg_count = 0
+                    _dbg_total_notify = 0.0
+                    _dbg_max_notify = 0.0
+                    _dbg_last_log = now
 
-                # Calculate angle
-                angle = 15 * math.sin(2 * math.pi * message_counter / 40)
-
-                # Create JSON message
-                data = {
-                    "type": "robot_pos",
-                    "x": round(x, 2),
-                    "y": round(y, 2),
-                    "angle": round(angle, 2),
-                }
-                message = json.dumps(data).encode("utf-8")
-                if self.tx_char:
-                    self.tx_char.value = message
-
-                if self.device and self.tx_char:
-                    # type が controller のクライアントにのみ送信
-                    for connection, props in list(self.connected_clients.items()):
-                        if props.get("type") == "controller":
-                            try:
-                                await self.device.notify_subscriber(
-                                    connection, self.tx_char, message
-                                )
-                            except Exception as e:
-                                self.logger.warning(
-                                    f"Failed to send to {connection}: {e}"
-                                )
-
-                # self.logger.info(f"Sent: {message.decode('utf-8')}")
-                await asyncio.sleep(0.1)  # 100ms interval
+                # Fixed-interval sleep: subtract elapsed time from interval
+                now = loop.time()
+                sleep_time = next_tick - now
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                next_tick += interval
+                # If we fell behind (notify took too long), reset to prevent burst
+                if next_tick < now:
+                    next_tick = now + interval
         except asyncio.CancelledError:
             self.logger.info("Stopped sending messages")
             raise
