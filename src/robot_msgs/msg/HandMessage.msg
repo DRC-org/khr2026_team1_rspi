@@ -1,0 +1,4 @@
+YaguraMechanism yagura_1
+YaguraMechanism yagura_2
+RingMechanism ring_1
+RingMechanism ring_2

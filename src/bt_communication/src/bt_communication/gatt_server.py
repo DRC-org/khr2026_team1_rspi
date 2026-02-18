@@ -157,20 +157,61 @@ class BluetoothGATTServer:
             await asyncio.get_running_loop().create_future()
 
     async def _send_messages_periodically(self):
-        """Send pending TX data every 100ms"""
+        """Send pending TX data at fixed 100ms intervals.
+
+        Uses wall-clock scheduling so that notify_subscribers() latency
+        does not add to the interval (previous bug: sleep was ADDED to
+        notify time, giving ~200ms cycles instead of 100ms).
+        """
+        interval = 0.1  # 100ms target
+        loop = asyncio.get_event_loop()
+        next_tick = loop.time() + interval
+        # === DEBUG ===
+        _dbg_count = 0
+        _dbg_total_notify = 0.0
+        _dbg_max_notify = 0.0
+        _dbg_last_log = loop.time()
+
         try:
             while True:
-                # Process pending TX data (feedback from robot_control)
-                # Only the latest data is kept; older data is dropped to prevent queue buildup
                 pending = self._pending_tx_data
                 if pending is not None:
                     self._pending_tx_data = None
                     if self.tx_char and self.device:
                         encoded = pending.encode("utf-8")
                         self.tx_char.value = encoded
+                        t0 = loop.time()
                         await self.device.notify_subscribers(self.tx_char)
+                        notify_time = loop.time() - t0
+                        _dbg_count += 1
+                        _dbg_total_notify += notify_time
+                        if notify_time > _dbg_max_notify:
+                            _dbg_max_notify = notify_time
 
-                await asyncio.sleep(0.1)  # 100ms interval
+                # === DEBUG: log every 3 seconds ===
+                now = loop.time()
+                if now - _dbg_last_log > 3.0:
+                    if _dbg_count > 0:
+                        self.logger.info(
+                            f"[BLE TX DEBUG] {_dbg_count} notifs in 3s "
+                            f"({_dbg_count / 3:.1f}/s) | "
+                            f"notify avg={_dbg_total_notify / _dbg_count * 1000:.1f}ms "
+                            f"max={_dbg_max_notify * 1000:.1f}ms"
+                        )
+                    _dbg_count = 0
+                    _dbg_total_notify = 0.0
+                    _dbg_max_notify = 0.0
+                    _dbg_last_log = now
+
+                # Fixed-interval sleep: subtract elapsed time from interval
+                now = loop.time()
+                sleep_time = next_tick - now
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+                next_tick += interval
+                # If we fell behind (notify took too long), reset to prevent burst
+                if next_tick < now:
+                    next_tick = now + interval
         except asyncio.CancelledError:
             self.logger.info("Stopped sending messages")
             raise

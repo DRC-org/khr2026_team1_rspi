@@ -2,11 +2,37 @@ import json
 import math
 
 from rclpy.node import Node
+from robot_msgs.msg import RingMechanism, RobotFeedback, YaguraMechanism
 from std_msgs.msg import String
 
 from .constants import MAX_SPEED_MPS
 from .m3508 import M3508Controller
 from .vec2 import Vec2
+
+_YAGURA_POS = {
+    YaguraMechanism.POS_UP: "up",
+    YaguraMechanism.POS_DOWN: "down",
+    YaguraMechanism.POS_STOPPED: "stopped",
+}
+
+_YAGURA_STATE = {
+    YaguraMechanism.STATE_OPEN: "open",
+    YaguraMechanism.STATE_CLOSED: "closed",
+    YaguraMechanism.STATE_STOPPED: "stopped",
+}
+
+_RING_POS = {
+    RingMechanism.POS_PICKUP: "pickup",
+    RingMechanism.POS_YAGURA: "yagura",
+    RingMechanism.POS_HONMARU: "honmaru",
+    RingMechanism.POS_STOPPED: "stopped",
+}
+
+_RING_STATE = {
+    RingMechanism.STATE_OPEN: "open",
+    RingMechanism.STATE_CLOSED: "closed",
+    RingMechanism.STATE_STOPPED: "stopped",
+}
 
 
 class RobotController(Node):
@@ -16,7 +42,7 @@ class RobotController(Node):
         self.publisher_control = self.create_publisher(String, "robot_control", 10)
         self.publisher_feedback = self.create_publisher(String, "bluetooth_tx", 10)
         self.subscriber_feedback = self.create_subscription(
-            String, "robot_feedback", self.on_robot_feedback, 10
+            RobotFeedback, "robot_feedback", self.on_robot_feedback, 10
         )
         self.subscriber_controller = self.create_subscription(
             String, "bluetooth_rx", self.on_controller_command, 10
@@ -25,7 +51,7 @@ class RobotController(Node):
         self.m3508_cntl = M3508Controller()
 
         # フィードバック用のバッファ（最新のメッセージを保持）
-        self.feedback_buffer = None
+        self.feedback_buffer: RobotFeedback | None = None
 
         # コマンドを 50 ms ごとに送信する
         self.create_timer(0.05, self.send_control_command)
@@ -34,10 +60,7 @@ class RobotController(Node):
 
         self.get_logger().info("Robot Controller Node initialized")
 
-    def on_robot_feedback(self, msg: String) -> None:
-        self.get_logger().info(f"Received feedback: {msg.data}")
-
-        # 最新のフィードバックをバッファに保存
+    def on_robot_feedback(self, msg: RobotFeedback) -> None:
         self.feedback_buffer = msg
 
     def on_controller_command(self, msg: String) -> None:
@@ -82,9 +105,35 @@ class RobotController(Node):
         """
         フィードバックを送信する。100 ms ごとに呼び出される。
         """
-        if self.feedback_buffer is not None:
-            self.publisher_feedback.publish(self.feedback_buffer)
-            self.feedback_buffer = None
+        if self.feedback_buffer is None:
+            return
+
+        fb = self.feedback_buffer
+        data = {
+            "m3508_rpms": {
+                "fl": fb.m3508_rpms.fl,
+                "fr": fb.m3508_rpms.fr,
+                "rl": fb.m3508_rpms.rl,
+                "rr": fb.m3508_rpms.rr,
+            },
+            "yagura": {
+                "1_pos": _YAGURA_POS.get(fb.yagura_1.pos, "stopped"),
+                "1_state": _YAGURA_STATE.get(fb.yagura_1.state, "stopped"),
+                "2_pos": _YAGURA_POS.get(fb.yagura_2.pos, "stopped"),
+                "2_state": _YAGURA_STATE.get(fb.yagura_2.state, "stopped"),
+            },
+            "ring": {
+                "1_pos": _RING_POS.get(fb.ring_1.pos, "stopped"),
+                "1_state": _RING_STATE.get(fb.ring_1.state, "stopped"),
+                "2_pos": _RING_POS.get(fb.ring_2.pos, "stopped"),
+                "2_state": _RING_STATE.get(fb.ring_2.state, "stopped"),
+            },
+        }
+
+        msg = String()
+        msg.data = json.dumps(data)
+        self.publisher_feedback.publish(msg)
+        self.feedback_buffer = None
 
     def send_control_command(self) -> None:
         """
