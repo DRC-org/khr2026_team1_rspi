@@ -104,12 +104,29 @@ class RobotController(Node):
                     * math.pi,  # 1 秒で半回転を最大にする（最高速度で旋回すると速すぎるため）
                 )
 
-            elif command["type"] == "hand":
-                target = command.get("target", "")
-                type = command.get("type", "")
-                action = command.get("action", "")
+            elif command["type"] == "hand_control":
+                target: str = command.get("target", "")
+                control_type: str = command.get("control_type", "")
+                action: str = command.get("action", "")
 
-                self.hands_cntl.set_target(target, type, action)
+                enum_dict = {}
+                if target.startswith("yagura"):
+                    if control_type == "pos":
+                        enum_dict = _YAGURA_POS
+                    elif control_type == "state":
+                        enum_dict = _YAGURA_STATE
+                elif target.startswith("ring"):
+                    if control_type == "pos":
+                        enum_dict = _RING_POS
+                    elif control_type == "state":
+                        enum_dict = _RING_STATE
+
+                keys = [k for k, v in enum_dict.items() if v == action]
+
+                if keys and keys[0] is not None:
+                    self.hands_cntl.set_target(target, control_type, keys[0])
+                else:
+                    self.get_logger().warn(f"Unknown action: {action}")
 
             elif command["type"] == "pid_gains":
                 # PIDゲインをESP32に転送
