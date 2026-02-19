@@ -49,8 +49,10 @@ class RobotController(Node):
     def __init__(self):
         super().__init__("robot_control_node")
 
-        self.pub_wheel_control = self.create_publisher(String, "wheel_control", 10)
-        self.pub_hand_control = self.create_publisher(String, "hand_control", 10)
+        self.pub_wheel_control = self.create_publisher(
+            WheelMessage, "wheel_control", 10
+        )
+        self.pub_hand_control = self.create_publisher(HandMessage, "hand_control", 10)
         self.pub_bt_feedback = self.create_publisher(String, "bluetooth_tx", 10)
         self.sub_wheel_feedback = self.create_subscription(
             WheelMessage, "wheel_feedback", self.on_wheel_feedback, 10
