@@ -104,6 +104,13 @@ class RobotController(Node):
                     * math.pi,  # 1 秒で半回転を最大にする（最高速度で旋回すると速すぎるため）
                 )
 
+            elif command["type"] == "hand":
+                target = command.get("target", "")
+                type = command.get("type", "")
+                action = command.get("action", "")
+
+                self.hands_cntl.set_target(target, type, action)
+
             elif command["type"] == "pid_gains":
                 # PIDゲインをESP32に転送
                 kp = max(0.0, min(10.0, command.get("kp", 0.5)))

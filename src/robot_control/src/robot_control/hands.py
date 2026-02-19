@@ -16,3 +16,25 @@ class HandsController:
         self.ring_1_state = RingMechanism.STATE_STOPPED
         self.ring_2_pos = RingMechanism.POS_STOPPED
         self.ring_2_state = RingMechanism.STATE_STOPPED
+
+    def set_target(self, target: str, type: str, action: int) -> None:
+        if target == "yagura_1":
+            if type == "pos":
+                self.yagura_1_pos = action
+            elif type == "state":
+                self.yagura_1_state = action
+        elif target == "yagura_2":
+            if type == "pos":
+                self.yagura_2_pos = action
+            elif type == "state":
+                self.yagura_2_state = action
+        elif target == "ring_1":
+            if type == "pos":
+                self.ring_1_pos = action
+            elif type == "state":
+                self.ring_1_state = action
+        elif target == "ring_2":
+            if type == "pos":
+                self.ring_2_pos = action
+            elif type == "state":
+                self.ring_2_state = action
