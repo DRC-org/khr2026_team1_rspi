@@ -15,12 +15,17 @@ class M3508Controller:
         self.target_rpm_rl = 0.0  # Rear Left (ID: 3)
         self.target_rpm_rr = 0.0  # Rear Right (ID: 4)
 
+        self.target_kp = None
+        self.target_ki = None
+        self.target_kd = None
+
         self.target_velocity = Vec2(0.0, 0.0)
         self.target_omega = 0.0  # 反時計回りの角速度 [rad/s]
 
     def set_target_velocity(self, velocity: Vec2, omega: float) -> None:
         """
         目標速度を設定する
+
         Args:
             velocity (Vec2): 目標速度ベクトル [m/s]
             omega (float): 反時計回りの角速度 [rad/s]
@@ -74,3 +79,16 @@ class M3508Controller:
             rpms = [rpm * scale_factor for rpm in rpms]
 
         return rpms
+
+    def set_target_pid_gains(self, kp: float, ki: float, kd: float) -> None:
+        """
+        PIDゲインを設定する
+
+        Args:
+            kp (float): 比例ゲイン
+            ki (float): 積分ゲイン
+            kd (float): 微分ゲイン
+        """
+        self.target_kp = kp
+        self.target_ki = ki
+        self.target_kd = kd
