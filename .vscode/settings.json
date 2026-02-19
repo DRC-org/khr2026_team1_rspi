@@ -1,7 +1,11 @@
 {
   "python.analysis.extraPaths": [
     "./src/bt_communication/src",
-    "./src/robot_control/src"
+    "./src/robot_control/src",
+    "/opt/ros/jazzy/lib/python3.12/site-packages",
+    "./install/robot_msgs/lib/python3.12/site-packages",
+    "./install/robot_control/lib/python3.12/site-packages",
+    "./install/bt_communication/lib/python3.12/site-packages"
   ],
   "cmake.sourceDirectory": "./src/khr2026_team1_rspi",
   "cmake.ignoreCMakeListsMissing": true

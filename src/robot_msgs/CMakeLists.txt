@@ -7,6 +7,8 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/WheelSpeeds.msg"
   "msg/PIDGains.msg"
+  "msg/PIDTerms.msg"
+  "msg/FeedbackPIDTerms.msg"
   "msg/YaguraMechanism.msg"
   "msg/RingMechanism.msg"
   "msg/WheelMessage.msg"
