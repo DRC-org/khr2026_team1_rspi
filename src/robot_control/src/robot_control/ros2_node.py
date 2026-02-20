@@ -2,7 +2,13 @@ import json
 import math
 
 from rclpy.node import Node
-from robot_msgs.msg import HandMessage, RingMechanism, WheelMessage, YaguraMechanism
+from robot_msgs.msg import (
+    HandMessage,
+    PIDGains,
+    RingMechanism,
+    WheelMessage,
+    YaguraMechanism,
+)
 from std_msgs.msg import String
 
 from .constants import MAX_SPEED_MPS
@@ -224,10 +230,11 @@ class RobotController(Node):
             and self.m3508_cntl.target_ki is not None
             and self.m3508_cntl.target_kd is not None
         ):
-            wheel_msg.m3508_gains.size = 1  # type: ignore[assignment]
-            wheel_msg.m3508_gains[0].kp = self.m3508_cntl.target_kp  # type: ignore[index]
-            wheel_msg.m3508_gains[0].ki = self.m3508_cntl.target_ki  # type: ignore[index]
-            wheel_msg.m3508_gains[0].kd = self.m3508_cntl.target_kd  # type: ignore[index]
+            gains = PIDGains()
+            gains.kp = self.m3508_cntl.target_kp
+            gains.ki = self.m3508_cntl.target_ki
+            gains.kd = self.m3508_cntl.target_kd
+            wheel_msg.m3508_gains = [gains]  # type: ignore[assignment]
 
         self.pub_wheel_control.publish(wheel_msg)
 
