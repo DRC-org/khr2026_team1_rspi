@@ -119,7 +119,7 @@ def generate_launch_description():
         package="nav2_controller",
         executable="controller_server",
         output="screen",
-        parameters=[nav2_params_path],
+        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
         remappings=[("/cmd_vel", "/cmd_vel_nav")],
         condition=UnlessCondition(use_sim_data),
     )
@@ -127,7 +127,7 @@ def generate_launch_description():
         package="nav2_controller",
         executable="controller_server",
         output="screen",
-        parameters=[nav2_params_path],
+        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
         # No remapping: Nav2 publishes directly to /cmd_vel → Gazebo bridge picks it up
         condition=IfCondition(use_sim_data),
     )
@@ -137,7 +137,7 @@ def generate_launch_description():
         executable="planner_server",
         name="planner_server",
         output="screen",
-        parameters=[nav2_params_path],
+        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
     )
 
     behavior_server = Node(
@@ -145,8 +145,9 @@ def generate_launch_description():
         executable="behavior_server",
         name="behavior_server",
         output="screen",
-        parameters=[nav2_params_path],
+        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
     )
+
 
     bt_navigator = Node(
         package="nav2_bt_navigator",
