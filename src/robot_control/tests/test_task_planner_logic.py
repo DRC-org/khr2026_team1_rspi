@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../scripts'))
 
 # Try importing
 try:
-    from task_planner import TaskOptimizer
+    from task_optimizer_standalone import TaskOptimizer
 except ImportError as e:
-    pytest.skip(f"Failed to import task_planner: {e}", allow_module_level=True)
+    pytest.skip(f"Failed to import task_optimizer_standalone: {e}", allow_module_level=True)
 
 class TestTaskOptimizer:
     def setup_method(self):

@@ -26,6 +26,7 @@ def generate_launch_description():
     # Launch Arguments
     use_sim_time = LaunchConfiguration("use_sim_time")
     map_mode = LaunchConfiguration("map_mode")
+    use_sim_data = LaunchConfiguration("use_sim_data")
 
     declare_use_sim_time = DeclareLaunchArgument(
         "use_sim_time",
@@ -37,6 +38,12 @@ def generate_launch_description():
         "map_mode",
         default_value="true",
         description="True: Use static map (AMCL), False: Use SLAM (Mapping)",
+    )
+
+    declare_use_sim_data = DeclareLaunchArgument(
+        "use_sim_data",
+        default_value="false",
+        description="true: simulation mode (Gazebo), false: real robot mode",
     )
 
     # ---------------------------------------------------------
@@ -75,13 +82,23 @@ def generate_launch_description():
         output="screen",
     )
 
-    # Bluetooth Node
+    # Bluetooth Node は実機モードのみ
     bt_node = Node(
         package="bt_communication",
         executable="bluetooth_node",
         name="bluetooth_node",
         output="screen",
         parameters=[{"hci_transport": "usb:0"}],
+        condition=UnlessCondition(use_sim_data),
+    )
+
+    # SimMonitor はシミュレーションモードのみ (到達通知・表示)
+    sim_monitor_node = Node(
+        package="robot_control",
+        executable="sim_monitor.py",
+        name="sim_monitor",
+        output="screen",
+        condition=IfCondition(use_sim_data),
     )
 
     # Rviz2
@@ -231,11 +248,13 @@ def generate_launch_description():
         [
             declare_use_sim_time,
             declare_map_mode,
+            declare_use_sim_data,
             tf_base_laser,
             # tf_odom_base,
             tf_map_odom,
             # ydlidar_launch,
             bt_node,
+            sim_monitor_node,
             rviz_node,
             # Shared Nav2 Nodes
             controller_server,
@@ -251,4 +270,5 @@ def generate_launch_description():
             amcl_node,
             lifecycle_manager_map,
         ]
+
     )

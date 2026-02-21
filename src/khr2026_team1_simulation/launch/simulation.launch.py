@@ -1,7 +1,8 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -14,6 +15,7 @@ def generate_launch_description():
     world_file = os.path.join(pkg_share, 'worlds', 'khr2026_field.sdf')
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
+    use_sim_data = LaunchConfiguration('use_sim_data', default='true')
 
     robot_state_publisher = Node(
         package='robot_state_publisher',
@@ -66,15 +68,64 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory('robot_control'), 'launch', 'robot_bringup.launch.py')
         ),
-        launch_arguments={'use_sim_time': 'true', 'map_mode': 'true'}.items()
+        launch_arguments={
+            'use_sim_time': 'true',
+            'map_mode': 'true',
+            'use_sim_data': use_sim_data,
+        }.items()
     )
 
-    scoring_node = Node(package='robot_control', executable='scoring_node.py', output='screen')
-    hand_bridge = Node(package='robot_control', executable='hand_bridge_node.py', output='screen')
-    mission_control = Node(package='robot_control', executable='mission_control_node.py', output='screen')
-    gz_attachment = Node(package='robot_control', executable='gz_attachment_node.py', output='screen')
+    scoring_node = Node(
+        package='robot_control',
+        executable='scoring_node.py',
+        output='screen',
+        condition=IfCondition(use_sim_data)
+    )
+    hand_bridge = Node(
+        package='robot_control',
+        executable='hand_bridge_node.py',
+        output='screen',
+        condition=IfCondition(use_sim_data)
+    )
+    mission_control = Node(
+        package='robot_control',
+        executable='mission_control_node.py',
+        output='screen',
+    )
+    gz_attachment = Node(
+        package='robot_control',
+        executable='gz_attachment_node.py',
+        output='screen',
+        condition=IfCondition(use_sim_data)
+    )
+
+    # ---------------------------------------------------------------------------
+    # Static TF for scoring_node: yagura / ring supply positions in map frame
+    # ---------------------------------------------------------------------------
+    # These let scoring_node detect yagura_*/ring_* frames via /tf
+    tf_yagura_1 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['2.96', '0.6', '0.125', '0', '0', '0', 'map', 'yagura_1'],
+        condition=IfCondition(use_sim_data)
+    )
+    tf_yagura_2 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['5.0', '2.0', '0.125', '0', '0', '0', 'map', 'yagura_2'],
+        condition=IfCondition(use_sim_data)
+    )
+    tf_ring_supply = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0.7', '6.2', '0.0', '0', '0', '0', 'map', 'ring_supply_1'],
+        condition=IfCondition(use_sim_data)
+    )
 
     return LaunchDescription([
-        robot_state_publisher, gazebo, spawn_entity, bridge, 
-        nav2_bringup, scoring_node, hand_bridge, mission_control, gz_attachment
+        DeclareLaunchArgument('use_sim_data', default_value='true',
+                              description='true: use simulation data, false: use real robot data'),
+        robot_state_publisher, gazebo, spawn_entity, bridge,
+        nav2_bringup, scoring_node, hand_bridge, mission_control, gz_attachment,
+        tf_yagura_1, tf_yagura_2, tf_ring_supply,
     ])

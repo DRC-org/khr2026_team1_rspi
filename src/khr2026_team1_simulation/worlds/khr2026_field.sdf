@@ -49,5 +49,82 @@
         <visual name="visual"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry><material><ambient>1.0 0.8 0.0 1</ambient></material></visual>
       </link>
     </model>
-  </world>
+      <!-- 追加モデル: 追加やぐら (yagura_2) -->
+    <model name="yagura_2">
+      <static>true</static>
+      <pose>5.0 2.0 0.125 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <cylinder>
+              <radius>0.057</radius>
+              <length>0.25</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.057</radius>
+              <length>0.25</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 追加モデル: リング供給台 (ring_supply) -->
+    <model name="ring_supply">
+      <static>true</static>
+      <pose>8.0 3.5 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>0.3 0.3 0.2</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>0.3 0.3 0.2</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.2 0.8 0.2 1</ambient>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 追加モデル: 4つの陣地柱 (zone_1~4) -->
+    <model name="zone_1">
+      <static>true</static>
+      <pose>1.0 1.0 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry><material><ambient>0.5 0.5 0.5 1</ambient></material></visual>
+      </link>
+    </model>
+    <model name="zone_2">
+      <static>true</static>
+      <pose>6.0 1.0 0.25 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry><material><ambient>0.5 0.5 0.5 1</ambient></material></visual></link>
+    </model>
+    <model name="zone_3">
+      <static>true</static>
+      <pose>1.0 5.5 0.25 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry><material><ambient>0.5 0.5 0.5 1</ambient></material></visual></link>
+    </model>
+    <model name="zone_4">
+      <static>true</static>
+      <pose>6.0 5.5 0.25 0 0 0</pose>
+      <link name="link"><collision name="collision"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.03</radius><length>0.5</length></cylinder></geometry><material><ambient>0.5 0.5 0.5 1</ambient></material></visual></link>
+    </model>
+
+</world>
 </sdf>
