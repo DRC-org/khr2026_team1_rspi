@@ -57,7 +57,7 @@ def generate_launch_description():
             '/model/khr2026_robot/joint/right_finger_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double'
         ],
         remappings=[
-            ('/model/khr2026_robot/cmd_vel', '/cmd_vel'),
+            ('/model/khr2026_robot/cmd_vel', '/cmd_vel_nav'),
             ('/model/khr2026_robot/odometry', '/odom'),
             ('/model/khr2026_robot/tf', '/tf'),
         ],

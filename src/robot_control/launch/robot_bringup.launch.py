@@ -101,6 +101,7 @@ def generate_launch_description():
         condition=IfCondition(use_sim_data),
     )
 
+
     # Rviz2
     rviz_node = Node(
         package="rviz2",
@@ -121,15 +122,6 @@ def generate_launch_description():
         output="screen",
         parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
         remappings=[("/cmd_vel", "/cmd_vel_nav")],
-        condition=UnlessCondition(use_sim_data),
-    )
-    controller_server_sim = Node(
-        package="nav2_controller",
-        executable="controller_server",
-        output="screen",
-        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
-        # No remapping: Nav2 publishes directly to /cmd_vel → Gazebo bridge picks it up
-        condition=IfCondition(use_sim_data),
     )
 
     planner_server = Node(
@@ -270,7 +262,6 @@ def generate_launch_description():
             rviz_node,
             # Shared Nav2 Nodes
             controller_server,
-            controller_server_sim,
             planner_server,
             behavior_server,
             bt_navigator,
