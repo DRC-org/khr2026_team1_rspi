@@ -8,9 +8,9 @@ class HandsController:
 
     def __init__(self):
         self.yagura_1_pos = YaguraMechanism.POS_STOPPED
-        self.yagura_1_state = YaguraMechanism.STATE_STOPPED
+        self.yagura_1_state = YaguraMechanism.STATE_CLOSE_DONE
         self.yagura_2_pos = YaguraMechanism.POS_STOPPED
-        self.yagura_2_state = YaguraMechanism.STATE_STOPPED
+        self.yagura_2_state = YaguraMechanism.STATE_CLOSE_DONE
 
         self.ring_1_pos = RingMechanism.POS_STOPPED
         self.ring_1_state = RingMechanism.STATE_STOPPED
