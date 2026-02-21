@@ -7,6 +7,7 @@ from geometry_msgs.msg import PoseStamped
 from tf2_msgs.msg import TFMessage
 import json
 import time
+import threading
 
 from robot_control.mission_logic.state import GameState, ZoneState
 from robot_control.mission_logic.planner import ActionPlanner
@@ -42,11 +43,13 @@ class MissionControlNode(Node):
         # Publishers
         self.control_pub = self.create_publisher(String, '/robot_control', 10)
         
-        # Logic loop
-        self.create_timer(1.0, self.control_loop)
-        
+        # Mission loop runs on a separate thread to avoid "Executor already spinning"
         self.current_action = None
         self.last_hardware_cmd_time = 0
+        
+        self._mission_thread = threading.Thread(
+            target=self._mission_loop, daemon=True)
+        self._mission_thread.start()
         
         self.get_logger().info("Mission Control (Production Version) Initialized")
 
@@ -65,6 +68,15 @@ class MissionControlNode(Node):
     def score_callback(self, msg):
         """Update internal GameState via LogicManager"""
         self.logic.sync_state(msg.data)
+
+    def _mission_loop(self):
+        """Mission control loop running on a dedicated thread.
+        This avoids the 'Executor already spinning' error that occurs
+        when calling navigator.goToPose() inside a timer callback.
+        """
+        while rclpy.ok():
+            self.control_loop()
+            time.sleep(0.5)  # 500ms ループ間隔
 
     def control_loop(self):
         # 1. Check if moving or executing hardware
