@@ -58,12 +58,8 @@ def generate_launch_description():
     # )
 
     # Static Transform Publisher (base_link -> laser_frame)
-    tf_base_laser = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        arguments=["0", "0", "0.2", "0", "0", "0", "base_link", "laser_frame"],
-        output="screen",
-    )
+    # Note: Handled by robot_state_publisher via URDF
+    # tf_base_laser = Node(...)
 
     # Static Transform Publisher (odom -> base_link)
     # tf_odom_base = Node(
@@ -78,8 +74,10 @@ def generate_launch_description():
     tf_map_odom = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
-        arguments=["0", "0", "0", "0", "0", "0", "map", "odom"],
+        arguments=["0", "0", "0", "0", "0", "0", "map", "odom", "--ros-args", "--log-level", "ERROR"],
         output="screen",
+        parameters=[{"use_sim_time": use_sim_time}],
+        condition=UnlessCondition(map_mode),
     )
 
     # Bluetooth Node は実機モードのみ
@@ -98,6 +96,8 @@ def generate_launch_description():
         executable="sim_monitor.py",
         name="sim_monitor",
         output="screen",
+        parameters=[{"use_sim_time": use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
         condition=IfCondition(use_sim_data),
     )
 
@@ -108,7 +108,8 @@ def generate_launch_description():
         executable="rviz2",
         name="rviz2",
         output="screen",
-        arguments=["-d", rviz_config_path],
+        arguments=["-d", rviz_config_path, "--ros-args", "--log-level", "ERROR"],
+        parameters=[{"use_sim_time": use_sim_time}],
     )
 
     # ---------------------------------------------------------
@@ -122,6 +123,7 @@ def generate_launch_description():
         output="screen",
         parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
         remappings=[("/cmd_vel", "/cmd_vel_nav")],
+        arguments=["--ros-args", "--log-level", "ERROR"],
     )
 
     planner_server = Node(
@@ -130,6 +132,7 @@ def generate_launch_description():
         name="planner_server",
         output="screen",
         parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
     )
 
     behavior_server = Node(
@@ -138,6 +141,7 @@ def generate_launch_description():
         name="behavior_server",
         output="screen",
         parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
     )
 
 
@@ -146,7 +150,8 @@ def generate_launch_description():
         executable="bt_navigator",
         name="bt_navigator",
         output="screen",
-        parameters=[nav2_params_path],
+        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
     )
 
     waypoint_follower = Node(
@@ -154,7 +159,8 @@ def generate_launch_description():
         executable="waypoint_follower",
         name="waypoint_follower",
         output="screen",
-        parameters=[nav2_params_path],
+        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
     )
 
     # ---------------------------------------------------------
@@ -184,6 +190,7 @@ def generate_launch_description():
             {"yaml_filename": map_file_path},
             {"use_sim_time": use_sim_time},
         ],
+        arguments=["--ros-args", "--log-level", "ERROR"],
         condition=IfCondition(map_mode),
     )
 
@@ -193,7 +200,8 @@ def generate_launch_description():
         executable="amcl",
         name="amcl",
         output="screen",
-        parameters=[nav2_params_path],
+        parameters=[nav2_params_path, {"use_sim_time": use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
         condition=IfCondition(map_mode),
     )
 
@@ -245,6 +253,7 @@ def generate_launch_description():
             {"autostart": True},
             {"node_names": lifecycle_nodes_map},
         ],
+        arguments=["--ros-args", "--log-level", "ERROR"],
         condition=IfCondition(map_mode),
     )
 
@@ -253,7 +262,7 @@ def generate_launch_description():
             declare_use_sim_time,
             declare_map_mode,
             declare_use_sim_data,
-            tf_base_laser,
+            # tf_base_laser, # Removed redundant TF
             # tf_odom_base,
             tf_map_odom,
             # ydlidar_launch,

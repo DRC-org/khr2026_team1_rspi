@@ -25,7 +25,8 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'robot_description': Command(['xacro ', xacro_file])
-        }]
+        }],
+        arguments=["--ros-args", "--log-level", "ERROR"]
     )
 
     gazebo = IncludeLaunchDescription(
@@ -38,7 +39,7 @@ def generate_launch_description():
     spawn_entity = Node(
         package='ros_gz_sim',
         executable='create',
-        arguments=['-topic', 'robot_description', '-name', 'khr2026_robot', '-x', '0.3', '-y', '0.5', '-z', '0.1'],
+        arguments=['-topic', 'robot_description', '-name', 'khr2026_robot', '-x', '0.8', '-y', '1.0', '-z', '0.1', '--ros-args', '--log-level', 'ERROR'],
         output='screen'
     )
 
@@ -46,6 +47,7 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
+            '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/model/khr2026_robot/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
             '/model/khr2026_robot/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
             '/model/khr2026_robot/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
@@ -54,13 +56,15 @@ def generate_launch_description():
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
             '/model/khr2026_robot/joint/lift_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
             '/model/khr2026_robot/joint/left_finger_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
-            '/model/khr2026_robot/joint/right_finger_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double'
+            '/model/khr2026_robot/joint/right_finger_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+            '--ros-args', '--log-level', 'ERROR'
         ],
         remappings=[
             ('/model/khr2026_robot/cmd_vel', '/cmd_vel_nav'),
             ('/model/khr2026_robot/odometry', '/odom'),
             ('/model/khr2026_robot/tf', '/tf'),
         ],
+        parameters=[{'use_sim_time': use_sim_time}],
         output='screen'
     )
 
@@ -79,23 +83,31 @@ def generate_launch_description():
         package='robot_control',
         executable='scoring_node.py',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
         condition=IfCondition(use_sim_data)
     )
     hand_bridge = Node(
         package='robot_control',
         executable='hand_bridge_node.py',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
         condition=IfCondition(use_sim_data)
     )
     mission_control = Node(
         package='robot_control',
         executable='mission_control_node.py',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"]
     )
     gz_attachment = Node(
         package='robot_control',
         executable='gz_attachment_node.py',
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
         condition=IfCondition(use_sim_data)
     )
 
@@ -106,19 +118,22 @@ def generate_launch_description():
     tf_yagura_1 = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['2.96', '0.6', '0.125', '0', '0', '0', 'map', 'yagura_1'],
+        arguments=['2.96', '0.6', '0.125', '0', '0', '0', 'map', 'yagura_1', '--ros-args', '--log-level', 'ERROR'],
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_sim_data)
     )
     tf_yagura_2 = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['5.0', '2.0', '0.125', '0', '0', '0', 'map', 'yagura_2'],
+        arguments=['5.0', '2.0', '0.125', '0', '0', '0', 'map', 'yagura_2', '--ros-args', '--log-level', 'ERROR'],
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_sim_data)
     )
     tf_ring_supply = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0.7', '6.2', '0.0', '0', '0', '0', 'map', 'ring_supply_1'],
+        arguments=['0.7', '6.2', '0.0', '0', '0', '0', 'map', 'ring_supply_1', '--ros-args', '--log-level', 'ERROR'],
+        parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_sim_data)
     )
 
