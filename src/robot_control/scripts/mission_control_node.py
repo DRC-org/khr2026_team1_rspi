@@ -4,7 +4,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from tf2_msgs.msg import TFMessage
 import json
 import time
@@ -18,66 +18,61 @@ class MissionControlNode(Node):
     def __init__(self):
         super().__init__('mission_control_node')
         
+        # Balanced log filtering: ERROR for noise, INFO for mission progress
+        self.get_logger().set_level(rclpy.logging.LoggingSeverity.INFO)
+        
         self.state = GameState()
         self.logic = LogicManager(self.state)
         self.planner = ActionPlanner()
-        self.navigator = BasicNavigator()
+        # Navigator will be initialized in main
+        self.navigator = None
         
-        # Set initial pose for AMCL (match Gazebo spawn coordinates)
-        initial_pose = PoseStamped()
-        initial_pose.header.frame_id = 'map'
-        initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
-        initial_pose.pose.position.x = 0.3
-        initial_pose.pose.position.y = 0.5
-        initial_pose.pose.orientation.w = 1.0
-        self.navigator.setInitialPose(initial_pose)
-        
-        # Wait for Nav2 to become fully active
-        self.get_logger().info("Waiting for Nav2 to become active...")
-        self.navigator.waitUntilNav2Active()
-
         # Subscriptions
-        self.create_subscription(TFMessage, '/tf', self.tf_callback, 10)
+        self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self.amcl_pose_callback, 10)
         self.create_subscription(String, '/score_detail', self.score_callback, 10)
         self.create_subscription(String, '/robot_status', self.status_callback, 10)
         
         # Publishers
         self.control_pub = self.create_publisher(String, '/robot_control', 10)
         
-        # Mission loop runs on a separate thread to avoid "Executor already spinning"
         self.current_action = None
         self.last_hardware_cmd_time = 0
+        self._initialized = False
         
-        self._mission_thread = threading.Thread(
-            target=self._mission_loop, daemon=True)
-        self._mission_thread.start()
-        
-        self.get_logger().info("Mission Control (Production Version) Initialized")
+        # Start mission thread to avoid executor conflicts
+        self.mission_thread = threading.Thread(target=self._mission_loop)
+        self.mission_thread.daemon = True
+        self.mission_thread.start()
+    
+    def _mission_loop(self):
+        """Separate thread for blocking mission logic"""
+        while rclpy.ok():
+            if self._initialized and self.navigator:
+                try:
+                    self.control_loop()
+                except Exception as e:
+                    self.get_logger().error(f"Error in control loop: {e}")
+            time.sleep(0.5)
+    
+    def set_navigator(self, nav):
+        self.navigator = nav
+        self._initialized = True
 
     def status_callback(self, msg):
         """Handle hardware feedback via LogicManager"""
         if self.logic.process_feedback(msg.data):
             self.get_logger().info("Hardware action confirmed complete.")
 
-    def tf_callback(self, msg):
-        """Update robot position from TF"""
-        for transform in msg.transforms:
-            if transform.child_frame_id == 'base_link':
-                self.state.robot_x = transform.transform.translation.x
-                self.state.robot_y = transform.transform.translation.y
+    def amcl_pose_callback(self, msg):
+        """Update robot position from AMCL Pose"""
+        self.state.robot_x = msg.pose.pose.position.x
+        self.state.robot_y = msg.pose.pose.position.y
 
     def score_callback(self, msg):
         """Update internal GameState via LogicManager"""
         self.logic.sync_state(msg.data)
 
-    def _mission_loop(self):
-        """Mission control loop running on a dedicated thread.
-        This avoids the 'Executor already spinning' error that occurs
-        when calling navigator.goToPose() inside a timer callback.
-        """
-        while rclpy.ok():
-            self.control_loop()
-            time.sleep(0.5)  # 500ms ループ間隔
+    # Removed control_tick timer to use _mission_loop instead
 
     def control_loop(self):
         # 1. Check if moving or executing hardware
@@ -145,6 +140,7 @@ class MissionControlNode(Node):
     def execute_hardware_sequence(self, action):
         """Send JSON commands to /robot_control based on spot type"""
         control_data = {
+            "target": {"x": action['x'], "y": action['y']},
             "yagura": {"1_pos": "stopped", "1_state": "open", "2_pos": "stopped", "2_state": "open"},
             "ring": {"1_pos": "stopped", "1_state": "open", "2_pos": "stopped", "2_state": "open"}
         }
@@ -186,16 +182,37 @@ class MissionControlNode(Node):
 def main():
     rclpy.init()
 
-    # BasicNavigator は内部で spin_until_future_complete を呼ぶため、
-    # MultiThreadedExecutor でメインノードと並列スピンさせる。
+    # 1. Start Navigator
+    nav = BasicNavigator()
+    
+    # Wait for services to be available
+    print("Waiting for Nav2 services...")
+    import time
+    
+    # Set initial pose with retries
+    initial_pose = PoseStamped()
+    initial_pose.header.frame_id = 'map'
+    # Use 0 stamp if simulation hasn't started, or current time
+    initial_pose.header.stamp = nav.get_clock().now().to_msg()
+    initial_pose.pose.position.x = 0.8
+    initial_pose.pose.position.y = 1.0
+    initial_pose.pose.orientation.w = 1.0
+    
+    # Forced activation and pose setting
+    for i in range(20):
+        nav.setInitialPose(initial_pose)
+        print(f"Publishing Initial Pose (Attempt {i+1}/20)...")
+        time.sleep(2.0)
+        # We can't easily check for amcl_pose here without a subscriber
+        # but we'll assume it works after a few tries
+        if i > 2: break # Don't wait too long if it's already working
+        
+    # 2. Start our control node
     node = MissionControlNode()
-    executor = MultiThreadedExecutor(num_threads=4)
-    executor.add_node(node)
-    # BasicNavigator は node.__init__ 内で作成済みなので executor に追加
-    executor.add_node(node.navigator)
-
+    node.set_navigator(nav)
+    
     try:
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:

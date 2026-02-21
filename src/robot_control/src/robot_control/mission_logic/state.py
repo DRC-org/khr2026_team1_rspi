@@ -9,8 +9,8 @@ class ZoneState:
 @dataclass
 class GameState:
     # Robot State
-    robot_x: float = 0.3
-    robot_y: float = 0.5
+    robot_x: float = 0.0
+    robot_y: float = 0.0
     held_yagura: int = 0
     held_rings: int = 0
     
