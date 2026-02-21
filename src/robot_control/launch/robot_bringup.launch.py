@@ -113,12 +113,23 @@ def generate_launch_description():
     # ---------------------------------------------------------
     # Nav2 Nodes (Shared between modes)
     # ---------------------------------------------------------
+    # Real robot: remap /cmd_vel → /cmd_vel_nav to avoid conflicts with hardware driver
+    # Simulation: output directly to /cmd_vel which Gazebo bridge listens to
     controller_server = Node(
         package="nav2_controller",
         executable="controller_server",
         output="screen",
         parameters=[nav2_params_path],
         remappings=[("/cmd_vel", "/cmd_vel_nav")],
+        condition=UnlessCondition(use_sim_data),
+    )
+    controller_server_sim = Node(
+        package="nav2_controller",
+        executable="controller_server",
+        output="screen",
+        parameters=[nav2_params_path],
+        # No remapping: Nav2 publishes directly to /cmd_vel → Gazebo bridge picks it up
+        condition=IfCondition(use_sim_data),
     )
 
     planner_server = Node(
@@ -258,6 +269,7 @@ def generate_launch_description():
             rviz_node,
             # Shared Nav2 Nodes
             controller_server,
+            controller_server_sim,
             planner_server,
             behavior_server,
             bt_navigator,
