@@ -62,7 +62,7 @@ class MissionControlNode(Node):
     def tf_callback(self, msg):
         """Update robot position from TF"""
         for transform in msg.transforms:
-            if transform.child_frame_id == 'khr2026_robot':
+            if transform.child_frame_id == 'base_link':
                 self.state.robot_x = transform.transform.translation.x
                 self.state.robot_y = transform.transform.translation.y
 

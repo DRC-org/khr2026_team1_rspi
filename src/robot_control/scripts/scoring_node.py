@@ -28,7 +28,7 @@ class ScoringNode(Node):
         
         for t in msg.transforms:
             fid, pos = t.child_frame_id, t.transform.translation
-            if fid == 'khr2026_robot' and 0.5 < pos.y < 1.5: self.sm.report_yagura_zone_entry()
+            if fid == 'base_link' and 0.5 < pos.y < 1.5: self.sm.report_yagura_zone_entry()
             
             # Check Yagura positions
             if fid.startswith('yagura_'):

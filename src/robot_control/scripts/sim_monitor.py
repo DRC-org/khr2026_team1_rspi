@@ -26,7 +26,8 @@ class SimMonitor(Node):
     # ---------------------------------------------------------------------
     def tf_cb(self, msg):
         for t in msg.transforms:
-            if t.child_frame_id == 'khr2026_robot':
+            # Gazebo bridge publishes odom→base_link, not khr2026_robot
+            if t.child_frame_id == 'base_link':
                 self.pos = (t.transform.translation.x, t.transform.translation.y)
 
     # ---------------------------------------------------------------------
