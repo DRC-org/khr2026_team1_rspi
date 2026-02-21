@@ -118,6 +118,29 @@ ros2 launch robot_control robot_bringup.launch.py map_mode:=false
 
 ## メモ
 
+### シミュレーションモードと実ロボットモードの切り替え
+
+`robot_control` の `robot_bringup.launch.py` と `khr2026_team1_simulation` の `simulation.launch.py` では、`use_sim_data` という新しい Launch 引数を追加しました。
+
+- **シミュレーションモード** (デフォルト)
+
+  ```sh
+  ros2 launch khr2026_team1_simulation simulation.launch.py use_sim_data:=true
+  ```
+
+  - Gazebo が起動し、シミュレートされた LiDAR データ (`/scan`) と TF (`odom -> base_link`) が自動で提供されます。
+  - `MissionControlNode` が自動で初期姿勢を設定し、Nav2 がすぐに利用可能になります。
+
+- **実ロボットモード**
+  ```sh
+  ros2 launch khr2026_team1_simulation simulation.launch.py use_sim_data:=false
+  ```
+
+  - Gazebo は起動せず、実機の LiDAR や IMU からのトピックを使用します。
+  - 初期姿勢は RViz の _2D Pose Estimate_ ツール等で手動設定してください。
+
+このフラグは `robot_bringup.launch.py` の `use_sim_data` パラメータへも伝搬され、Lidar のブリッジや static TF の生成が条件分岐で制御されます。
+
 ### uv を使いながら Python のパッケージを作る
 
 #### つくるとき

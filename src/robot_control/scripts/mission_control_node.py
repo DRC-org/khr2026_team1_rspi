@@ -21,6 +21,19 @@ class MissionControlNode(Node):
         self.planner = ActionPlanner()
         self.navigator = BasicNavigator()
         
+        # Set initial pose for AMCL (match Gazebo spawn coordinates)
+        initial_pose = PoseStamped()
+        initial_pose.header.frame_id = 'map'
+        initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
+        initial_pose.pose.position.x = 0.3
+        initial_pose.pose.position.y = 0.5
+        initial_pose.pose.orientation.w = 1.0
+        self.navigator.setInitialPose(initial_pose)
+        
+        # Wait for Nav2 to become fully active
+        self.get_logger().info("Waiting for Nav2 to become active...")
+        self.navigator.waitUntilNav2Active()
+
         # Subscriptions
         self.create_subscription(TFMessage, '/tf', self.tf_callback, 10)
         self.create_subscription(String, '/score_detail', self.score_callback, 10)

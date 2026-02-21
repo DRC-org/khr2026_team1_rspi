@@ -12,7 +12,7 @@ from launch import LaunchDescription
 
 def generate_launch_description():
     pkg_robot_control = get_package_share_directory("robot_control")
-    pkg_ydlidar = get_package_share_directory("ydlidar_ros2_driver")
+    # pkg_ydlidar = get_package_share_directory("ydlidar_ros2_driver")
     pkg_slam_toolbox = get_package_share_directory("slam_toolbox")
 
     # Configuration Files
@@ -44,11 +44,11 @@ def generate_launch_description():
     # ---------------------------------------------------------
 
     # YDLidar Launch
-    ydlidar_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_ydlidar, "launch", "ydlidar_launch.py")
-        )
-    )
+    # ydlidar_launch = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(pkg_ydlidar, "launch", "ydlidar_launch.py")
+    #     )
+    # )
 
     # Static Transform Publisher (base_link -> laser_frame)
     tf_base_laser = Node(
@@ -59,14 +59,12 @@ def generate_launch_description():
     )
 
     # Static Transform Publisher (odom -> base_link)
-    # This provides the missing link in the TF tree
-    # In the future, this should be replaced by actual odometry from encoders/IMU
-    tf_odom_base = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        arguments=["0", "0", "0", "0", "0", "0", "odom", "base_link"],
-        output="screen",
-    )
+    # tf_odom_base = Node(
+    #     package="tf2_ros",
+    #     executable="static_transform_publisher",
+    #     arguments=["0", "0", "0", "0", "0", "0", "odom", "base_link"],
+    #     output="screen",
+    # )
 
     # Temporary static TF (map -> odom) until AMCL initializes
     # AMCL will override this once initial pose is set
@@ -234,9 +232,9 @@ def generate_launch_description():
             declare_use_sim_time,
             declare_map_mode,
             tf_base_laser,
-            tf_odom_base,
+            # tf_odom_base,
             tf_map_odom,
-            ydlidar_launch,
+            # ydlidar_launch,
             bt_node,
             rviz_node,
             # Shared Nav2 Nodes
