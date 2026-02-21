@@ -3,16 +3,24 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from tf2_msgs.msg import TFMessage
+import tf2_ros
+from geometry_msgs.msg import TransformStamped
 import json
 import math
+import time
 
 class SimMonitor(Node):
     def __init__(self):
         super().__init__('sim_monitor')
-        self.create_subscription(TFMessage, '/tf', self.tf_cb, 10)
+        
+        # TF Buffer & Listener
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         self.create_subscription(String, '/score_detail', self.score_cb, 10)
         self.create_subscription(String, '/robot_control', self.control_cb, 10)
-        # Publisher for arrival notification (used by MissionControlNode)
+        
+        # Publisher for arrival notification
         self.status_pub = self.create_publisher(String, '/robot_status', 10)
 
         self.pos = (0.0, 0.0)
@@ -21,14 +29,23 @@ class SimMonitor(Node):
         self.v_goal = False
         self.last_cmd = "{}"
         self.create_timer(1.0, self.render)
+        self.create_timer(0.1, self.update_pos) # Faster position update
         print("\033[2J\033[H")  # Clear screen
+
+    def update_pos(self):
+        """Update position from TFBuffer (Map -> BaseLink)"""
+        try:
+            # map -> base_link を取得
+            t = self.tf_buffer.lookup_transform(
+                'map', 'base_link', rclpy.time.Time())
+            self.pos = (t.transform.translation.x, t.transform.translation.y)
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
+            pass
 
     # ---------------------------------------------------------------------
     def tf_cb(self, msg):
-        for t in msg.transforms:
-            # Gazebo bridge publishes odom→base_link, not khr2026_robot
-            if t.child_frame_id == 'base_link':
-                self.pos = (t.transform.translation.x, t.transform.translation.y)
+        # Deprecated: using Buffer instead
+        pass
 
     # ---------------------------------------------------------------------
     def score_cb(self, msg):
@@ -76,31 +93,51 @@ class SimMonitor(Node):
         print(f"最新の指令  : {self.last_cmd}")
 
         # 簡易マップ表示 (3.5m x 7.0m)
-        grid_w, grid_h = 20, 14
+        # 競技フィールドサイズに合わせたスケーリング
+        # 実際のフィールドは Y方向が長く (7.0m)、X方向が短い (3.5m)
+        grid_w, grid_h = 24, 48 # キャラクターベースの縦長表示
         print("\n[フィールド簡易マップ]")
-        for y in range(grid_h, -1, -1):
+        for y_idx in range(grid_h, -1, -1):
             line = ""
-            for x in range(grid_w):
-                rx, ry = self.pos[0] * (grid_w/3.5), self.pos[1] * (grid_h/7.0)
-                if abs(x - rx) < 0.5 and abs(y - ry) < 0.5:
+            for x_idx in range(grid_w):
+                # 座標(x,y) -> グリッド(x_idx, y_idx)
+                # x: [0, 3.5], y: [0, 7.0]
+                rx_grid = self.pos[0] * (grid_w / 3.5)
+                ry_grid = self.pos[1] * (grid_h / 7.0)
+                
+                # 目標地点の表示
+                target_str = "  "
+                target = self._extract_target()
+                if target:
+                    tx_grid = target[0] * (grid_w / 3.5)
+                    ty_grid = target[1] * (grid_h / 7.0)
+                    if abs(x_idx - tx_grid) < 0.6 and abs(y_idx - ty_grid) < 0.6:
+                        target_str = "🎯"
+
+                if abs(x_idx - rx_grid) < 0.6 and abs(y_idx - ry_grid) < 0.6:
                     line += "🤖"
-                elif (x == int(3.25*(grid_w/3.5)) and y == int(1.4*(grid_h/7.0))):
+                elif (x_idx == int(3.25*(grid_w/3.5)) and y_idx == int(1.4*(grid_h/7.0))):
                     line += "👑"
-                elif x == 0 or x == grid_w-1 or y == 0 or y == grid_h-1:
+                elif target_str != "  ":
+                    line += target_str
+                elif x_idx == 0 or x_idx == grid_w-1 or y_idx == 0 or y_idx == grid_h-1:
                     line += "田"
                 else:
                     line += "  "
-            print(line)
+            if y_idx % 2 == 0: # 縦長すぎるので2行に1回表示
+                print(line)
 
 def main():
     rclpy.init()
     node = SimMonitor()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        if rclpy.ok():
+            node.destroy_node()
+            rclpy.shutdown()
 
 if __name__ == "__main__":
     main()
