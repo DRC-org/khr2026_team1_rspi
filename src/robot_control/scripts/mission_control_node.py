@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from geometry_msgs.msg import PoseStamped
@@ -184,10 +185,22 @@ class MissionControlNode(Node):
 
 def main():
     rclpy.init()
+
+    # BasicNavigator は内部で spin_until_future_complete を呼ぶため、
+    # MultiThreadedExecutor でメインノードと並列スピンさせる。
     node = MissionControlNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    # BasicNavigator は node.__init__ 内で作成済みなので executor に追加
+    executor.add_node(node.navigator)
+
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     main()
