@@ -18,9 +18,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 概要
 
 関西春ロボコン 2026 チーム 1 の Raspberry Pi 側実装。
-**ROS 2 Kilted Kaiju** を使用。4 輪オムニドライブ（M3508 モータ）＋ YDLiDAR による自律走行システム。
+**ROS 2 Jazzy Jalisco** を使用。4 輪オムニドライブ（M3508 モータ）＋ YDLiDAR による自律走行システム。
 
 詳細な実装計画・作業記録は `auto_routing_plan.md` を参照。
+
+### リポジトリ構成
+
+| リポジトリ | 説明 |
+|-----------|------|
+| `khr2026_team1_rspi`（本リポジトリ） | Raspberry Pi 側の中央制御プログラム（ROS2） |
+| `khr2026_team1_cwmc` | 足回りモータコントローラ（ESP32）。本リポジトリからのコマンドを受け取り M3508 を駆動 |
+| `khr2026_team1_hwmc` | ロボットハンド等モータコントローラ（ESP32）。本リポジトリからのコマンドを受け取り手先モータを駆動 |
 
 ---
 
@@ -200,12 +208,12 @@ bumble は `src/bt_communication/.venv` にのみインストール済み。
 
 ```bash
 sudo apt install \
-  ros-kilted-slam-toolbox \
-  ros-kilted-nav2-bringup \
-  ros-kilted-nav2-msgs \
-  ros-kilted-dwb-core \
-  ros-kilted-tf2-ros \
-  ros-kilted-tf2-tools \
-  ros-kilted-nav2-map-server \
-  ros-kilted-laser-filters
+  ros-jazzy-slam-toolbox \
+  ros-jazzy-nav2-bringup \
+  ros-jazzy-nav2-msgs \
+  ros-jazzy-dwb-core \
+  ros-jazzy-tf2-ros \
+  ros-jazzy-tf2-tools \
+  ros-jazzy-nav2-map-server \
+  ros-jazzy-laser-filters
 ```

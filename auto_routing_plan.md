@@ -687,13 +687,13 @@ ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field.yaml
 
 ```bash
 sudo apt install \
-  ros-kilted-slam-toolbox \
-  ros-kilted-nav2-bringup \
-  ros-kilted-nav2-msgs \
-  ros-kilted-dwb-core \
-  ros-kilted-tf2-ros \
-  ros-kilted-tf2-tools \
-  ros-kilted-nav2-map-server
+  ros-jazzy-slam-toolbox \
+  ros-jazzy-nav2-bringup \
+  ros-jazzy-nav2-msgs \
+  ros-jazzy-dwb-core \
+  ros-jazzy-tf2-ros \
+  ros-jazzy-tf2-tools \
+  ros-jazzy-nav2-map-server
 ```
 
 ---
@@ -743,7 +743,7 @@ sudo apt install \
 
    ```bash
    # laser_filters のインストール
-   sudo apt install ros-kilted-laser-filters
+   sudo apt install ros-jazzy-laser-filters
    ```
 
    ```yaml
@@ -775,7 +775,7 @@ sudo apt install \
 - 実機確認済み: `/scan` 正常、`/odom` 正常、TF 正常
   - 実測 TF レート: 20.2 Hz（ESP32 からの wheel_feedback が ~20Hz のため。問題なし）
 
-**フェーズ2: cmd_vel ブリッジノード** ✅（実装完了、実機確認は次回）
+**フェーズ2: cmd_vel ブリッジノード** ✅（実機確認済み）
 - `cmd_vel_bridge_node.py`: `/cmd_vel` → `wheel_control` 変換を実装
 - `/nav_mode` ("manual"/"auto") でモード切り替え
 - `auto → manual` 切り替え時にゼロ RPM 指令を送信（急停止防止）
@@ -790,24 +790,165 @@ sudo apt install \
 
 #### 次回やること（優先順位順）
 
-1. **フェーズ2 実機確認**（最優先）
-   ```bash
-   ros2 launch auto_nav mapping_launch.py
-   ros2 topic pub /nav_mode std_msgs/String "data: 'auto'" --once
-   ros2 topic pub /cmd_vel geometry_msgs/Twist "{linear: {x: 0.2}}" --once
-   ```
-   確認項目:
-   - [ ] auto モード中に cmd_vel で車輪が動くか
-   - [ ] manual モード中に cmd_vel を送っても車輪が動かないか
-   - [ ] auto → manual 切り替え時に急停止しないか
-   - [ ] 横移動（Vy）が正しく動くか（オムニ確認）
-
-2. **LiDAR タイヤ映り込み問題の対策検討**（フェーズ3 着手前に決める）
-   - LiDAR の取付高さを確認し、タイヤより上にスキャン平面が来るか確認
-   - 来ない場合は `laser_filters` の `LaserScanFootprintFilter` を実装
+1. **LiDAR タイヤ映り込み問題の対策実装**（フェーズ3 着手前に必須）
+   - 取付高さ変更は不可のため、`laser_filters/LaserScanFootprintFilter` で対処する方針に決定
+   - `src/auto_nav/config/laser_filters.yaml` を作成
+   - `mapping_launch.py` にフィルタノードを追加し、`/scan_filtered` を配信
    - リスクと注意点 7 を参照
 
-3. **フェーズ3: SLAM セットアップ**
+2. **フェーズ3: SLAM セットアップ**
    - `slam_mapping_params.yaml` / `slam_localization_params.yaml` を作成
-   - `mapping_launch.py` に slam_toolbox を追加
-   - 必要パッケージのインストール: `sudo apt install ros-kilted-slam-toolbox`
+   - `mapping_launch.py` に slam_toolbox を追加（`scan_topic: /scan_filtered` を使用）
+   - 必要パッケージのインストール: `sudo apt install ros-jazzy-slam-toolbox`
+
+---
+
+### 2026-02-22
+
+#### 完了した作業
+
+**フェーズ2: cmd_vel ブリッジノード 実機確認** ✅
+
+| 確認項目 | 結果 |
+|----------|------|
+| `/odom` 配信レート | ✅ 20.0 Hz（安定） |
+| `wheel_feedback` 受信 | ✅ 正常 |
+| `/nav_mode` トピック存在 | ✅ 確認 |
+| manual モード動作 | ✅ Bluetooth 操縦正常、cmd_vel 無視を確認 |
+| auto モード切り替え | ✅ 切り替え後に車輪停止（Bluetooth 操縦無効化）を確認 |
+| cmd_vel → 車輪動作 | ✅ おおむね動作確認（詳細テストは次回） |
+| モード切り替え時急動作 | ✅ 問題なし |
+
+**不具合対応**
+- `scripts/launch_odometry.py` と `scripts/launch_cmd_vel_bridge.py` に実行権限がなく、launch 時に `executable not found` エラーが発生
+  - `chmod +x` で修正済み
+  - 今後スクリプトを新規追加する際は忘れずに実行権限を付けること
+
+**LiDAR タイヤ映り込みフィルタ実装** ✅
+
+- `LaserScanRangeFilter` で 0.33m 未満の点をすべて除去する実装を完了・実機確認済み
+- `/scan` → `/scan_filtered` (0.33m 未満を 0.0 に置換、0.33m 以上はそのまま通過)
+- static_tf (base_link → laser_frame, z=0.15m) も追加済み
+
+実装時の知見・注意事項:
+- `LaserScanFootprintFilter` を最初に試したが、動作しなかった（TF 変換でサイレント失敗し、スキャンが素通りする）
+- `LaserScanRangeFilter` はシンプルで確実に動作する（TF 不要）
+- launch ファイルで `name="laser_filter"` を設定すると yaml のトップキー名（`scan_to_scan_filter_chain`）と不一致になりパラメータが読み込まれない
+  → `name=` を削除してデフォルト名（`scan_to_scan_filter_chain`）を使うこと
+
+変更ファイル:
+- `src/auto_nav/config/laser_filters.yaml` (新規作成)
+- `src/auto_nav/launch/mapping_launch.py` (static_tf, laser_filter_node を追加)
+- `src/auto_nav/CMakeLists.txt` (config ディレクトリのインストール追加)
+- `src/auto_nav/package.xml` (laser_filters 依存追加)
+
+#### 次回やること（優先順位順）
+
+1. **フェーズ3: SLAM セットアップ**
+   - `slam_mapping_params.yaml` / `slam_localization_params.yaml` を作成
+   - `mapping_launch.py` に slam_toolbox を追加（`scan_topic: /scan_filtered` を使用）
+   - 必要パッケージのインストール: `sudo apt install ros-jazzy-slam-toolbox`
+   - LiDAR の static_tf (z=0.15m) が実機の取付高さと合っているか確認・調整すること
+
+---
+
+### 2026-02-22
+
+#### 実施内容
+
+**フェーズ3: SLAM セットアップ実施**
+
+- `slam_mapping_params.yaml` / `slam_localization_params.yaml` 作成完了
+- `mapping_launch.py` に `async_slam_toolbox_node` を追加
+- `package.xml` に `slam_toolbox` 依存追加
+- ビルド成功
+
+**view_frames による TF ツリー確認結果**
+
+```
+odom → base_link  (20.2Hz, OdometryNode 正常動作) ✅
+base_link → laser_frame  (static TF, 10000Hz) ✅
+map → odom  ← 存在しない（ロボット静止のため slam_toolbox 未発行）
+```
+
+`map → odom` が出ないのは静止状態のため正常。`minimum_travel_distance: 0.3m` 以上移動すれば発行される。
+
+**CLAUDE.md 更新**
+
+- ROS2 バージョン: `Kilted Kaiju` → `Jazzy Jalisco` に修正
+- プロジェクト構成の説明を追加:
+  - `khr2026_team1_rspi`: ラズパイ中央制御
+  - `khr2026_team1_cwmc`: 足回りモータ MCU
+  - `khr2026_team1_hwmc`: ロボットハンド等 MCU
+
+**`auto_routing_plan.md` 内の `ros-kilted-*` を `ros-jazzy-*` に一括修正**
+
+#### 机上テストの確認方法（実機確認手順）
+
+停止状態では `/map` は現れないが、以下で各コンポーネントを個別確認可能:
+
+```bash
+# 各トピックのデータ到達確認
+ros2 topic hz /scan
+ros2 topic hz /scan_filtered
+ros2 topic hz /odom
+
+# LiDAR フィルタ確認（手を近づけて 0.33m 以内を 0.0 にする）
+ros2 topic echo /scan_filtered --once
+
+# ノード起動確認
+ros2 node list          # /slam_toolbox が存在すること
+ros2 topic list | grep map  # /map が出るか
+
+# RViz: Fixed Frame = odom で LaserScan (/scan_filtered) を表示
+```
+
+実際のマッピングはロボットを動かして確認。
+
+#### 次回やること（優先順位順）
+
+1. **フェーズ3: 実際のマッピングテスト**
+   - ロボットを走らせてマップを生成する
+   - RViz で `/map` が更新されることを確認
+   - マップを保存する: `ros2 service call /slam_toolbox/save_map ...`
+2. **LiDAR static_tf の z 値確認**: 実機の取付高さを実測して 0.15m を必要なら修正
+3. **フェーズ4以降**: ウェイポイント管理、ルーティングノード、Nav2 統合
+
+---
+
+### 2026-02-22（続き）
+
+#### slam_toolbox ライフサイクル問題の解決
+
+**問題**:
+- slam_toolbox が起動してもマップが生成されない
+- `ros2 node info /slam_toolbox` で `/scan_filtered` がサブスクライブされていない
+- 状態を確認すると `unconfigured [1]` で止まっていた
+
+**原因**:
+- ROS2 Jazzy の slam_toolbox は **ライフサイクルノード** になっている
+- launch ファイルから起動しただけでは `unconfigured` 状態のまま
+- `configure → activate` の状態遷移が完了するまでスキャンを受け取らない
+
+**解決策**:
+- `nav2_lifecycle_manager` を使う案は、パッケージが未インストールのためエラー
+- `mapping_launch.py` に `TimerAction + ExecuteProcess` を追加して、追加パッケージなしで対応
+  - 起動 5秒後に `ros2 lifecycle set /slam_toolbox configure`
+  - 起動 7秒後に `ros2 lifecycle set /slam_toolbox activate`
+
+**動作確認**:
+- 起動後に `ros2 lifecycle get /slam_toolbox` → `active [3]` ✅
+- `/map` トピックが発行されることを確認 ✅
+
+#### 変更ファイル
+
+- `src/auto_nav/launch/mapping_launch.py` (TimerAction + ExecuteProcess で slam_toolbox 自動 activate を追加)
+
+#### 次回やること（優先順位順）
+
+1. **フェーズ3: 実際のマッピングテスト（フィールドで実施）**
+   - ロボットを走らせてマップを生成する
+   - RViz で `/map` が更新されることを確認
+   - マップを保存: `ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "name: {data: '/home/taiga/maps/field'}"`
+2. **LiDAR static_tf の z 値確認**: 実機の取付高さを実測して `0.15m` を必要なら修正
+3. **フェーズ4以降**: ウェイポイント管理、ルーティングノード、Nav2 統合

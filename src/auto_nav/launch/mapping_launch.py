@@ -4,6 +4,9 @@
 起動するノード:
   - micro_ros_agent        (ESP32 ↔ ROS2 ブリッジ, /dev/ttyUSB0)
   - ydlidar_ros2_driver    (LiDAR)
+  - static_tf              (base_link → laser_frame)
+  - laser_filter           (/scan → /scan_filtered, タイヤ映り込み除去)
+  - slam_toolbox           (mapping モード, /scan_filtered + /odom → /map + TF)
   - robot_control          (Bluetooth手動操縦 + ESP32制御)
   - bt_communication       (Bluetooth GATT サーバー)
   - auto_nav odometry      (wheel_feedback → /odom + TF)
@@ -18,10 +21,11 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterFile
 
 # bt_communication は bumble を .venv で管理しているため、
 # そのノードにだけ PYTHONPATH を通してシステム Python から bumble を参照できるようにする
@@ -41,6 +45,10 @@ _BT_PYTHONPATH = _BT_VENV_SITE_PACKAGES + (":" + _existing if _existing else "")
 
 
 def generate_launch_description():
+    auto_nav_share = get_package_share_directory("auto_nav")
+    laser_filters_config = os.path.join(auto_nav_share, "config", "laser_filters.yaml")
+    slam_params = os.path.join(auto_nav_share, "config", "slam_mapping_params.yaml")
+
     serial_port_arg = DeclareLaunchArgument(
         "serial_port",
         default_value="/dev/ttyUSB0",
@@ -99,14 +107,76 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
+    # LiDAR の TF: base_link → laser_frame
+    # 値はロボット実機のLiDAR取付位置に合わせて調整すること
+    #   x, y: ロボット中心からの水平オフセット [m]（中心なら 0.0, 0.0）
+    #   z: 取付高さ [m]（地面からではなくロボット基準座標からの高さ）
+    static_tf_node = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="static_tf_base_to_laser",
+        arguments=["0.0", "0.0", "0.15", "0.0", "0.0", "0.0", "base_link", "laser_frame"],
+        output="screen",
+    )
+
+    # タイヤ映り込みフィルタ: /scan → /scan_filtered
+    # ロボット中心から 0.32m 以内の点を除去（タイヤは ~0.30m）
+    laser_filter_node = Node(
+        package="laser_filters",
+        executable="scan_to_scan_filter_chain",
+        parameters=[laser_filters_config],
+        remappings=[
+            ("scan", "/scan"),
+            ("scan_filtered", "/scan_filtered"),
+        ],
+        output="screen",
+        emulate_tty=True,
+    )
+
+    slam_toolbox_node = Node(
+        package="slam_toolbox",
+        executable="async_slam_toolbox_node",
+        name="slam_toolbox",
+        parameters=[slam_params],
+        output="screen",
+        emulate_tty=True,
+    )
+
+    # slam_toolbox はライフサイクルノードのため、起動後に configure → activate する
+    # nav2_lifecycle_manager に依存しないよう TimerAction + ExecuteProcess で対応
+    configure_slam = TimerAction(
+        period=5.0,
+        actions=[
+            ExecuteProcess(
+                cmd=["ros2", "lifecycle", "set", "/slam_toolbox", "configure"],
+                output="screen",
+            )
+        ],
+    )
+
+    activate_slam = TimerAction(
+        period=7.0,
+        actions=[
+            ExecuteProcess(
+                cmd=["ros2", "lifecycle", "set", "/slam_toolbox", "activate"],
+                output="screen",
+            )
+        ],
+    )
+
     return LaunchDescription(
         [
             serial_port_arg,
             micro_ros_agent_node,
             ydlidar_launch,
+            static_tf_node,
+            laser_filter_node,
+            odometry_node,
+            slam_toolbox_node,
+            configure_slam,
+            activate_slam,
             robot_control_node,
             bt_communication_node,
-            odometry_node,
             cmd_vel_bridge_node,
         ]
     )
