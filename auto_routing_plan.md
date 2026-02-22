@@ -2,7 +2,7 @@
 
 ## 概要
 
-既存のロボット制御システム（4輪オムニドライブ + YDLiDAR）に自律走行機能を追加する。
+既存のロボット制御システム（4輪メカナムホイール + YDLiDAR）に自律走行機能を追加する。
 競技フィールドは毎回 ±5% の寸法誤差があるため、**試合前に毎回マッピング**を行い、
 その試合の実際のフィールド形状に合わせた地図を生成してから自律走行する。
 
@@ -87,7 +87,7 @@ Nav2 と SLAM には `/odom` と TF（`odom → base_link`）が必須。
 # サブスクライブ: wheel_feedback (WheelMessage)
 # パブリッシュ: /odom (nav_msgs/Odometry), /tf (odom→base_link)
 
-# 4輪オムニの前進運動学:
+# 4輪メカナムの前進運動学:
 #   Vx = (v_fl + v_fr + v_rl + v_rr) / 4
 #   Vy = (-v_fl + v_fr + v_rl - v_rr) / 4
 #   ω  = (-v_fl + v_fr - v_rl + v_rr) / (4 * (Lx + Ly))
@@ -196,7 +196,7 @@ ros2 topic pub /nav_mode std_msgs/String "data: 'auto'" --once
 ros2 topic pub /cmd_vel geometry_msgs/Twist \
   "{linear: {x: 0.2, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" --once
 
-# 横移動指令: Vy=0.2m/s（オムニ確認）
+# 横移動指令: Vy=0.2m/s（メカナム確認）
 ros2 topic pub /cmd_vel geometry_msgs/Twist \
   "{linear: {x: 0.0, y: 0.2, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" --once
 
@@ -210,7 +210,7 @@ ros2 topic pub /cmd_vel geometry_msgs/Twist \
 | テスト | 手順 | 合格基準 |
 |--------|------|---------|
 | 前進 | Vx=0.2 を送信 | ロボットが前方に動く。4輪が同じ方向に回転 |
-| 横移動 | Vy=0.2 を送信 | ロボットが真横に動く（オムニ動作確認） |
+| 横移動 | Vy=0.2 を送信 | ロボットが真横に動く（メカナム動作確認） |
 | 回転 | ω=0.5 を送信 | ロボットがその場で回転する |
 | モード競合テスト | `manual` モード中に cmd_vel を送信 | 車輪が動かないこと（Bluetooth操縦のみ有効） |
 | モード切り替え | `manual` → `auto` → `manual` を繰り返す | 切り替え時に車輪が急動作しないこと |
@@ -475,7 +475,7 @@ controller_server:
     controller_frequency: 20.0
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
-      # オムニドライブ対応: X/Y両方向に速度を出せる
+      # メカナムホイール対応: X/Y両方向に速度を出せる
       max_vel_x: 0.5        # [m/s]
       max_vel_y: 0.5        # オムニなのでY方向も有効
       max_vel_theta: 1.0    # [rad/s]
@@ -701,7 +701,7 @@ sudo apt install \
 ## リスクと注意点
 
 1. **オドメトリ精度**
-   - オムニホイールはスリップしやすく、長距離走行でドリフトが発生
+   - メカナムホイールはスリップしやすく、長距離走行でドリフトが発生
    - LiDAR SLAM が補正するが、マッピング中にゆっくり走ること（スリップ防止）
 
 2. **手動/自動モード競合**
@@ -721,7 +721,7 @@ sudo apt install \
    - 毎試合マッピング後にウェイポイント座標を微調整する運用が発生する
    - 調整しやすいよう、RViz2 でのウェイポイント確認手順を事前に練習しておくこと
 
-6. **Nav2 のオムニドライブ対応**
+6. **Nav2 のメカナムホイール対応**
    - デフォルト設定は差動二輪想定のため、Y方向速度を有効にする設定が必要
    - DWBプランナーの `VelocityIterator` プラグインのパラメータを確認すること
 
@@ -943,6 +943,62 @@ ros2 topic list | grep map  # /map が出るか
 #### 変更ファイル
 
 - `src/auto_nav/launch/mapping_launch.py` (TimerAction + ExecuteProcess で slam_toolbox 自動 activate を追加)
+
+---
+
+### 2026-02-22（続き²）
+
+#### slam_toolbox lifecycle set 問題の根本原因究明と最終解決
+
+**問題の経緯**:
+1. 固定タイマー (5s/7s) → "Node not found" で失敗
+2. リトライループ (`until ros2 lifecycle set ...`) でも "Node not found" が継続
+3. `use_lifecycle_manager: false` をパラメータ追加 → 効果なし（`/map` 未配信）
+
+**根本原因（コマンドで直接確認）**:
+- `ros2 lifecycle get /slam_toolbox` は ROS2 **デーモン**経由でノードを探すが、デーモンが slam_toolbox のライフサイクルノードを正常に検出できない → "Node not found"
+- 実際には slam_toolbox ノードはプロセスとして正常に動作しており、`/slam_toolbox/change_state` サービスも存在する
+- `ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState '{transition: {id: 1}}'` でサービスを**直接**呼び出すと成功 ✅
+- configure + activate 後に `/map` の配信を確認 ✅
+
+**確認したこと**:
+```bash
+# ノードは起動している
+ps aux | grep slam_toolbox  # プロセス存在を確認
+ros2 service list --no-daemon | grep slam  # lifecycle サービス一覧を確認
+#   → /slam_toolbox/change_state など lifecycle サービスは存在
+
+# lifecycle 状態を直接確認（デーモン不使用）
+ros2 service call /slam_toolbox/get_state lifecycle_msgs/srv/GetState
+#   → id=1, label='unconfigured'
+
+# configure → activate をサービス直接呼び出し
+ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState '{transition: {id: 1}}'
+sleep 2
+ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState '{transition: {id: 3}}'
+#   → /map トピックが出現 ✅
+```
+
+**最終修正**:
+- `mapping_launch.py` の lifecycle 管理を `ros2 lifecycle set` → `ros2 service call /slam_toolbox/change_state` に変更
+- `ros2 service call` はサービスが現れるまで自動待機するため、タイマー 3 秒の初期遅延のみでリトライ不要
+- `use_lifecycle_manager: false`（無効なパラメータ）は削除
+
+**変更ファイル**:
+- `src/auto_nav/launch/mapping_launch.py`
+- `src/auto_nav/config/slam_mapping_params.yaml` (use_lifecycle_manager: false を削除)
+
+#### Hand feedback buffer スパム警告の修正
+
+**問題**:
+- ハンド ESP32（hwmc）が未接続の場合、`send_controller_feedback()` が 100ms ごとに
+  `[WARN] Hand feedback buffer is None` をログ出力しつづける
+- さらに hand_fb が None のとき wheel_fb も送信されず、Bluetooth フィードバックが途絶えていた
+
+**修正** (`src/robot_control/src/robot_control/ros2_node.py`):
+- `_hand_fb_warned` フラグを追加。未接続時は初回のみ WARN を出力（以降はスキップ）
+- ハンド未接続でも wheel_fb はそのまま Bluetooth に送信するよう変更
+- ハンドが再接続されたとき（`hand_fb is not None`）フラグをリセットし、次回切断時に再警告する
 
 #### 次回やること（優先順位順）
 

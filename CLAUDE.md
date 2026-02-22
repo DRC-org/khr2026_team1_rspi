@@ -4,8 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 作業ルール（必ず守ること）
 
-### 実機確認コマンドの提示
-ロボットの動作確認には実機が必要であり、確認は人間が行う。
+### デバッグ・動作確認のワークフロー
+
+**基本方針**: Claude がコマンドを打って直接デバッグできる環境を活用する。
+
+- ノード起動が必要なときは、ユーザーに起動を依頼する（**起動コマンドを必ず明記すること**）
+- ユーザーがノードを起動したら、Claude が自由に診断コマンドを実行してデバッグを進める
+- ロボット実機の物理的な動作確認（走行・センサー確認など）は引き続きユーザーが行う
+
+**ユーザーへの起動依頼の書き方（例）**:
+```
+以下のコマンドでノードを起動してください:
+  ros2 launch auto_nav mapping_launch.py
+起動したら教えてください。デバッグを進めます。
+```
+
+### ROS2 診断コマンドの注意事項
+- `ros2 topic list` / `ros2 node list` はデーモン経由のため slam_toolbox 等が見えないことがある
+  → `--no-daemon` オプションを使うか、`ros2 service call` で直接確認する
+- slam_toolbox の lifecycle 確認: `ros2 service call /slam_toolbox/get_state lifecycle_msgs/srv/GetState`
+- `/map` 等の確認: `ros2 topic echo --qos-reliability reliable /map nav_msgs/msg/OccupancyGrid --field info`
+
+### 実装完了時の記録
 実装完了後は、動作確認に必要なコマンドをすべてこのチャットに提示すること。
 また、その確認手順を `auto_routing_plan.md` の該当フェーズに記録すること。
 
@@ -18,7 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 概要
 
 関西春ロボコン 2026 チーム 1 の Raspberry Pi 側実装。
-**ROS 2 Jazzy Jalisco** を使用。4 輪オムニドライブ（M3508 モータ）＋ YDLiDAR による自律走行システム。
+**ROS 2 Jazzy Jalisco** を使用。4 輪メカナムホイール（M3508 モータ）＋ YDLiDAR による自律走行システム。
 
 詳細な実装計画・作業記録は `auto_routing_plan.md` を参照。
 

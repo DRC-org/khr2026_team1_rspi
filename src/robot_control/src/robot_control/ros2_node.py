@@ -80,6 +80,7 @@ class RobotController(Node):
         # フィードバック用に最新のメッセージを保持
         self.wheel_fb_buffer: WheelMessage | None = None
         self.hand_fb_buffer: HandMessage | None = None
+        self._hand_fb_warned = False  # ハンド未接続の WARN は初回のみ出す
 
         # ESP32 にコマンドを 50 ms ごとに送信する
         self.create_timer(0.05, self.send_control_command)
@@ -159,18 +160,22 @@ class RobotController(Node):
     def send_controller_feedback(self) -> None:
         """
         コントローラにフィードバックを送信する。100 ms ごとに呼び出される。
+        ハンド ESP32 が未接続でも、ホイールフィードバックは送信する。
         """
         if self.wheel_fb_buffer is None:
             self.get_logger().warn("Wheel feedback buffer is None")
-            return
-        if self.hand_fb_buffer is None:
-            self.get_logger().warn("Hand feedback buffer is None")
             return
 
         wheel_fb = self.wheel_fb_buffer
         hand_fb = self.hand_fb_buffer
 
-        data = {
+        if hand_fb is None and not self._hand_fb_warned:
+            self.get_logger().warn(
+                "Hand feedback not available (hand ESP32 not connected?)"
+            )
+            self._hand_fb_warned = True
+
+        data: dict = {
             "m3508_rpms": {
                 "fl": wheel_fb.m3508_rpms.fl,
                 "fr": wheel_fb.m3508_rpms.fr,
@@ -204,19 +209,22 @@ class RobotController(Node):
                     "d": wheel_fb.m3508_terms[0].rr.d,  # type: ignore[index]
                 },
             },
-            "yagura": {
+        }
+
+        if hand_fb is not None:
+            self._hand_fb_warned = False  # 再接続時にフラグをリセット
+            data["yagura"] = {
                 "1_pos": _YAGURA_POS.get(hand_fb.yagura_1.pos, "stopped"),
                 "1_state": _YAGURA_STATE.get(hand_fb.yagura_1.state, "stopped"),
                 "2_pos": _YAGURA_POS.get(hand_fb.yagura_2.pos, "stopped"),
                 "2_state": _YAGURA_STATE.get(hand_fb.yagura_2.state, "stopped"),
-            },
-            "ring": {
+            }
+            data["ring"] = {
                 "1_pos": _RING_POS.get(hand_fb.ring_1.pos, "stopped"),
                 "1_state": _RING_STATE.get(hand_fb.ring_1.state, "stopped"),
                 "2_pos": _RING_POS.get(hand_fb.ring_2.pos, "stopped"),
                 "2_state": _RING_STATE.get(hand_fb.ring_2.state, "stopped"),
-            },
-        }
+            }
 
         msg = String()
         msg.data = json.dumps(data)

@@ -25,7 +25,6 @@ from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchD
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterFile
 
 # bt_communication は bumble を .venv で管理しているため、
 # そのノードにだけ PYTHONPATH を通してシステム Python から bumble を参照できるようにする
@@ -142,23 +141,21 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
-    # slam_toolbox はライフサイクルノードのため、起動後に configure → activate する
-    # nav2_lifecycle_manager に依存しないよう TimerAction + ExecuteProcess で対応
-    configure_slam = TimerAction(
-        period=5.0,
+    # slam_toolbox はライフサイクルノードだが ros2 lifecycle コマンドはデーモン経由で
+    # 検出できないため、ros2 service call でサービスを直接呼び出す。
+    # ros2 service call はサービスが現れるまで自動で待機するため、タイマーの初期遅延のみ必要。
+    slam_lifecycle = TimerAction(
+        period=3.0,
         actions=[
             ExecuteProcess(
-                cmd=["ros2", "lifecycle", "set", "/slam_toolbox", "configure"],
-                output="screen",
-            )
-        ],
-    )
-
-    activate_slam = TimerAction(
-        period=7.0,
-        actions=[
-            ExecuteProcess(
-                cmd=["ros2", "lifecycle", "set", "/slam_toolbox", "activate"],
+                cmd=[
+                    "bash", "-c",
+                    "ros2 service call /slam_toolbox/change_state"
+                    " lifecycle_msgs/srv/ChangeState '{transition: {id: 1}}'"
+                    " && sleep 2"
+                    " && ros2 service call /slam_toolbox/change_state"
+                    " lifecycle_msgs/srv/ChangeState '{transition: {id: 3}}'",
+                ],
                 output="screen",
             )
         ],
@@ -173,8 +170,7 @@ def generate_launch_description():
             laser_filter_node,
             odometry_node,
             slam_toolbox_node,
-            configure_slam,
-            activate_slam,
+            slam_lifecycle,
             robot_control_node,
             bt_communication_node,
             cmd_vel_bridge_node,
