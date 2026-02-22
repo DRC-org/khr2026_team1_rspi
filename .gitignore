@@ -62,4 +62,4 @@ __pycache__/
 !src/**/worlds/*.sdf
 !src/**/urdf/*.sdf
 
-src/YDLidar-SDK
+src/YDLidar-SDKfix_init.txt
