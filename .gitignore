@@ -41,9 +41,9 @@
 *.dwo
 
 # ROS
-build
-install
-log
+build/
+install/
+log/
 
 # Python
 __pycache__/
@@ -51,5 +51,15 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.coverage
+.pytest_cache/
+
+# Simulation / Debug
+*.log
+*.gv
+*.pdf
+*.sdf
+!src/**/worlds/*.sdf
+!src/**/urdf/*.sdf
 
 src/YDLidar-SDK
