@@ -36,6 +36,7 @@ def generate_launch_description():
         launch_arguments={'gz_args': [f'-r -s {world_file}']}.items(),
     )
 
+    # オリジナル座標(x=0.8)でスポーン
     spawn_entity = Node(
         package='ros_gz_sim',
         executable='create',
@@ -50,19 +51,18 @@ def generate_launch_description():
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/model/khr2026_robot/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
             '/model/khr2026_robot/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
-            '/model/khr2026_robot/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
             '/world/khr2026_field/model/khr2026_robot/joint_state@sensor_msgs/msg/JointState[gz.msgs.Model',
             '/camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
+            '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
             '/model/khr2026_robot/joint/lift_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
             '/model/khr2026_robot/joint/left_finger_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
             '/model/khr2026_robot/joint/right_finger_joint/cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
             '--ros-args', '--log-level', 'ERROR'
         ],
         remappings=[
-            ('/model/khr2026_robot/cmd_vel', '/cmd_vel_nav'),
+            ('/model/khr2026_robot/cmd_vel', '/cmd_vel_inverted'),
             ('/model/khr2026_robot/odometry', '/odom'),
-            ('/model/khr2026_robot/tf', '/tf'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'
@@ -111,28 +111,55 @@ def generate_launch_description():
         condition=IfCondition(use_sim_data)
     )
 
-    # ---------------------------------------------------------------------------
-    # Static TF for scoring_node: yagura / ring supply positions in map frame
-    # ---------------------------------------------------------------------------
-    # These let scoring_node detect yagura_*/ring_* frames via /tf
+    cmd_vel_inverter = Node(
+        package='khr2026_team1_simulation',
+        executable='invert_cmd_vel.py',
+        name='cmd_vel_inverter',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=IfCondition(use_sim_data)
+    )
+
+    # ターゲット座座標もオリジナルに復元
     tf_yagura_1 = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['2.96', '0.6', '0.125', '0', '0', '0', 'map', 'yagura_1', '--ros-args', '--log-level', 'ERROR'],
+        arguments=['3.15', '2.0', '0.25', '0', '0', '0', 'map', 'yagura_1', '--ros-args', '--log-level', 'ERROR'],
         parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_sim_data)
     )
     tf_yagura_2 = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['5.0', '2.0', '0.125', '0', '0', '0', 'map', 'yagura_2', '--ros-args', '--log-level', 'ERROR'],
+        arguments=['3.15', '3.2', '0.25', '0', '0', '0', 'map', 'yagura_2', '--ros-args', '--log-level', 'ERROR'],
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=IfCondition(use_sim_data)
+    )
+    tf_yagura_3 = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['3.15', '4.4', '0.25', '0', '0', '0', 'map', 'yagura_3', '--ros-args', '--log-level', 'ERROR'],
         parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_sim_data)
     )
     tf_ring_supply = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0.7', '6.2', '0.0', '0', '0', '0', 'map', 'ring_supply_1', '--ros-args', '--log-level', 'ERROR'],
+        arguments=['0.7', '6.2', '0.15', '0', '0', '0', 'map', 'ring_supply_1', '--ros-args', '--log-level', 'ERROR'],
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=IfCondition(use_sim_data)
+    )
+    tf_supply_y = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['2.96', '0.6', '0.15', '0', '0', '0', 'map', 'supply_y', '--ros-args', '--log-level', 'ERROR'],
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=IfCondition(use_sim_data)
+    )
+    tf_honmaru = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['3.25', '1.4', '0.4', '0', '0', '0', 'map', 'honmaru', '--ros-args', '--log-level', 'ERROR'],
         parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(use_sim_data)
     )
@@ -140,7 +167,12 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_data', default_value='true',
                               description='true: use simulation data, false: use real robot data'),
-        robot_state_publisher, gazebo, spawn_entity, bridge,
+        robot_state_publisher, gazebo, spawn_entity, bridge, cmd_vel_inverter,
         nav2_bringup, scoring_node, hand_bridge, mission_control, gz_attachment,
-        tf_yagura_1, tf_yagura_2, tf_ring_supply,
+        tf_yagura_1,
+        tf_yagura_2,
+        tf_yagura_3,
+        tf_ring_supply,
+        tf_supply_y,
+        tf_honmaru
     ])

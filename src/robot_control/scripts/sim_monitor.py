@@ -91,41 +91,7 @@ class SimMonitor(Node):
         print(f"状態判定    : {'[王手!]' if self.ote else ''} {'[攻略達成(V-GOAL)!]' if self.v_goal else '進行中'}")
         print("-" * 40)
         print(f"最新の指令  : {self.last_cmd}")
-
-        # 簡易マップ表示 (3.5m x 7.0m)
-        # 競技フィールドサイズに合わせたスケーリング
-        # 実際のフィールドは Y方向が長く (7.0m)、X方向が短い (3.5m)
-        grid_w, grid_h = 24, 48 # キャラクターベースの縦長表示
-        print("\n[フィールド簡易マップ]")
-        for y_idx in range(grid_h, -1, -1):
-            line = ""
-            for x_idx in range(grid_w):
-                # 座標(x,y) -> グリッド(x_idx, y_idx)
-                # x: [0, 3.5], y: [0, 7.0]
-                rx_grid = self.pos[0] * (grid_w / 3.5)
-                ry_grid = self.pos[1] * (grid_h / 7.0)
-                
-                # 目標地点の表示
-                target_str = "  "
-                target = self._extract_target()
-                if target:
-                    tx_grid = target[0] * (grid_w / 3.5)
-                    ty_grid = target[1] * (grid_h / 7.0)
-                    if abs(x_idx - tx_grid) < 0.6 and abs(y_idx - ty_grid) < 0.6:
-                        target_str = "🎯"
-
-                if abs(x_idx - rx_grid) < 0.6 and abs(y_idx - ry_grid) < 0.6:
-                    line += "🤖"
-                elif (x_idx == int(3.25*(grid_w/3.5)) and y_idx == int(1.4*(grid_h/7.0))):
-                    line += "👑"
-                elif target_str != "  ":
-                    line += target_str
-                elif x_idx == 0 or x_idx == grid_w-1 or y_idx == 0 or y_idx == grid_h-1:
-                    line += "田"
-                else:
-                    line += "  "
-            if y_idx % 2 == 0: # 縦長すぎるので2行に1回表示
-                print(line)
+        print("-" * 40)
 
 def main():
     rclpy.init()

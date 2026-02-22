@@ -38,21 +38,7 @@ class MissionControlNode(Node):
         self.current_action = None
         self.last_hardware_cmd_time = 0
         self._initialized = False
-        
-        # Start mission thread to avoid executor conflicts
-        self.mission_thread = threading.Thread(target=self._mission_loop)
-        self.mission_thread.daemon = True
-        self.mission_thread.start()
     
-    def _mission_loop(self):
-        """Separate thread for blocking mission logic"""
-        while rclpy.ok():
-            if self._initialized and self.navigator:
-                try:
-                    self.control_loop()
-                except Exception as e:
-                    self.get_logger().error(f"Error in control loop: {e}")
-            time.sleep(0.5)
     
     def set_navigator(self, nav):
         self.navigator = nav
@@ -75,6 +61,9 @@ class MissionControlNode(Node):
     # Removed control_tick timer to use _mission_loop instead
 
     def control_loop(self):
+        if not self._initialized or not self.navigator:
+            return
+
         # 1. Check if moving or executing hardware
         if self.current_action:
             if not self.navigator.isTaskComplete():
@@ -82,12 +71,8 @@ class MissionControlNode(Node):
             
             # Check for Navigation result
             nav_result = self.navigator.getResult()
-            if nav_result == TaskResult.FAILED:
-                self.get_logger().error(f"Navigation to {self.current_action['name']} FAILED. Replanning...")
-                self.current_action = None
-                return
-            elif nav_result == TaskResult.CANCELED:
-                self.get_logger().warn(f"Navigation to {self.current_action['name']} CANCELED.")
+            if nav_result != TaskResult.SUCCEEDED:
+                self.get_logger().error(f"Navigation to {self.current_action['name']} did NOT succeed (Result: {nav_result}). Replanning...")
                 self.current_action = None
                 return
 
@@ -120,9 +105,10 @@ class MissionControlNode(Node):
             self.current_action = None
             self.last_hardware_cmd_time = 0
             
-        # 2. Plan
-        plan = self.planner.plan_mission(self.state)
-        if not plan: return
+        # 2. Plan only if we are idle
+        if self.current_action is None:
+            plan = self.planner.plan_mission(self.state)
+            if not plan: return
             
         next_spot = plan[0]
         self.get_logger().info(f"Navigating to: {next_spot['name']}")
@@ -134,7 +120,11 @@ class MissionControlNode(Node):
         goal.pose.position.y = next_spot['y']
         goal.pose.orientation.w = 1.0
         
-        self.navigator.goToPose(goal)
+        accepted = self.navigator.goToPose(goal)
+        if not accepted:
+            self.get_logger().error(f"Goal to {next_spot['name']} was rejected by Navigation server! Retrying...")
+            return
+            
         self.current_action = next_spot
 
     def execute_hardware_sequence(self, action):
@@ -187,32 +177,32 @@ def main():
     
     # Wait for services to be available
     print("Waiting for Nav2 services...")
-    import time
+    nav.waitUntilNav2Active()
+    print("Nav2 services active! Setting initial pose.")
     
-    # Set initial pose with retries
+    # Set initial pose
     initial_pose = PoseStamped()
     initial_pose.header.frame_id = 'map'
-    # Use 0 stamp if simulation hasn't started, or current time
     initial_pose.header.stamp = nav.get_clock().now().to_msg()
     initial_pose.pose.position.x = 0.8
     initial_pose.pose.position.y = 1.0
     initial_pose.pose.orientation.w = 1.0
     
     # Forced activation and pose setting
-    for i in range(20):
+    for i in range(5):
         nav.setInitialPose(initial_pose)
-        print(f"Publishing Initial Pose (Attempt {i+1}/20)...")
-        time.sleep(2.0)
-        # We can't easily check for amcl_pose here without a subscriber
-        # but we'll assume it works after a few tries
-        if i > 2: break # Don't wait too long if it's already working
+        print(f"Publishing Initial Pose (Attempt {i+1}/5)...")
+        import time
+        time.sleep(1.0)
         
     # 2. Start our control node
     node = MissionControlNode()
     node.set_navigator(nav)
     
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=0.1)
+            node.control_loop()
     except KeyboardInterrupt:
         pass
     finally:

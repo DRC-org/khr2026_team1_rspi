@@ -22,6 +22,7 @@ def generate_launch_description():
     nav2_params_path = os.path.join(pkg_robot_control, "config", "nav2_params.yaml")
     rviz_config_path = os.path.join(pkg_robot_control, "rviz", "nav2.rviz")
     map_file_path = os.path.join(pkg_robot_control, "maps", "field.yaml")
+    ekf_config_path = os.path.join(pkg_robot_control, "config", "ekf.yaml")
 
     # Launch Arguments
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -101,6 +102,14 @@ def generate_launch_description():
         condition=IfCondition(use_sim_data),
     )
 
+    robot_localization_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        parameters=[ekf_config_path, {"use_sim_time": use_sim_time}],
+        arguments=["--ros-args", "--log-level", "ERROR"],
+    )
 
     # Rviz2
     rviz_node = Node(
@@ -268,6 +277,7 @@ def generate_launch_description():
             # ydlidar_launch,
             bt_node,
             sim_monitor_node,
+            robot_localization_node,
             rviz_node,
             # Shared Nav2 Nodes
             controller_server,
