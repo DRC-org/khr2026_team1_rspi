@@ -69,7 +69,11 @@ class RobotController(Node):
         self.sub_bt_controller = self.create_subscription(
             String, "bluetooth_rx", self.on_controller_command, 10
         )
+        self.sub_nav_mode = self.create_subscription(
+            String, "/nav_mode", self.on_nav_mode, 10
+        )
 
+        self._nav_mode = "manual"
         self.m3508_cntl = M3508Controller()
         self.hands_cntl = HandsController()
 
@@ -83,6 +87,13 @@ class RobotController(Node):
         self.create_timer(0.1, self.send_controller_feedback)
 
         self.get_logger().info("Robot Controller Node initialized")
+
+    def on_nav_mode(self, msg: String) -> None:
+        prev = self._nav_mode
+        self._nav_mode = msg.data
+        # auto モードに切り替わったらジョイスティック入力をリセット
+        if prev == "manual" and self._nav_mode == "auto":
+            self.m3508_cntl.set_target_velocity(Vec2(0.0, 0.0), 0.0)
 
     def on_wheel_feedback(self, msg: WheelMessage) -> None:
         self.wheel_fb_buffer = msg
@@ -217,7 +228,10 @@ class RobotController(Node):
     def send_control_command(self) -> None:
         """
         ESP32 へコマンドを送信する。50 ms ごとに呼び出される。
+        auto モード中は cmd_vel_bridge が wheel_control を担当するためスキップする。
         """
+        if self._nav_mode == "auto":
+            return
 
         wheel_msg = WheelMessage()
         wheel_msg.m3508_rpms.fl = self.m3508_cntl.target_rpm_fl
