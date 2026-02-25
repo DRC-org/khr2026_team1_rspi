@@ -1008,3 +1008,161 @@ ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState '{tr
    - マップを保存: `ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "name: {data: '/home/taiga/maps/field'}"`
 2. **LiDAR static_tf の z 値確認**: 実機の取付高さを実測して `0.15m` を必要なら修正
 3. **フェーズ4以降**: ウェイポイント管理、ルーティングノード、Nav2 統合
+
+---
+
+### 2026-02-23
+
+#### コードレビュー修正（フェーズ3 全ファイル）
+
+レビューで発見した問題を修正。実機動作への影響は小さいが、精度・安定性・コード品質の向上を目的とする。
+
+| # | ファイル | 修正内容 |
+|---|---------|---------|
+| 1 | `slam_mapping_params.yaml` | `enable_interactive_mode: true → false`（ヘッドレス RPi で不要・CPU 節約） |
+| 2 | `slam_localization_params.yaml` | `do_loop_closing: true → false`（ローカリゼーション時に地図は更新しないため不要） |
+| 3 | `odometry_node.py` | theta 積分順序修正: `theta_old = self._theta` を先に保存してから theta を更新し、位置積分には `theta_old` を使用（旋回中の誤差蓄積を低減） |
+| 4 | `odometry_node.py` | 共分散行列を設定（全ゼロ → x:0.01, y:0.01, yaw:0.05, z/roll/pitch:1e6）。slam_toolbox がオドメトリ重みを正しく扱えるようになる |
+| 5 | `odometry_node.py` / `__init__.py` / `launch_odometry.py` | `main()` を `__init__.py` から `odometry_node.py` 末尾に移動。`launch_odometry.py` の import を `from auto_nav.odometry_node import main` に統一（`cmd_vel_bridge_node.py` と同じ構造に揃える） |
+| 6 | `auto_nav_launch.py`（新規作成） | ローカリゼーションモード用ランチファイルのスタブを作成。`map:=` 引数で保存済み地図パスを受け取り、`map_file_name` を slam_toolbox に渡す |
+
+#### フェーズ3 実走行・マップ生成・保存（2026-02-23）
+
+**ステータス: ✅ 完了**
+
+- ノード一括起動後、Bluetooth コントローラーで手動走行してマップ生成成功
+- `/map` が 1Hz で配信・TF ツリー完全（map→odom→base_link→laser_frame）確認済み
+- マップサイズ: 1149×540 cells（57m×27m）、解像度 0.05m/cell
+
+**地図保存で発見した問題**:
+- `ros2 service call /slam_toolbox/save_map` → `result=255`（失敗）
+  - 原因1: `/home/taiga/maps/` ディレクトリが存在しなかった
+  - 原因2: `save_map` は `nav2_map_saver` が必要だが未インストール
+- **正しい保存コマンドは `serialize_map`**（slam_toolbox ネイティブ形式）:
+
+```bash
+mkdir -p /home/taiga/maps
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
+  "filename: '/home/taiga/maps/field'"
+# → result=0（成功）
+# → field.posegraph (19MB) + field.data (8.9MB) が生成される
+```
+
+- ローカリゼーション起動時は `map:=/home/taiga/maps/field`（拡張子なし）を渡す
+- `slam_mapping_params.yaml` の `use_map_saver: true → false` に修正済み
+
+#### 次回やること（優先順位順）
+
+1. **フェーズ3 ローカリゼーションテスト**: 保存したマップで自己位置推定を確認
+   ```bash
+   ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+   ```
+2. **LiDAR static_tf の z 値確認**: 実機の取付高さを実測して `0.15m` を必要なら修正
+3. **フェーズ4以降**: ウェイポイント管理、ルーティングノード、Nav2 統合
+
+---
+
+### 2026-02-25
+
+#### フェーズ6 Step 1: nav2_params.yaml 作成
+
+**ステータス: ✅ 完了**
+
+`src/auto_nav/config/nav2_params.yaml` を新規作成した。
+map_server は slam_toolbox が `/map` を配信済みのため含めない。
+
+**設定概要**:
+
+| コンポーネント | 設定 |
+|--------------|------|
+| lifecycle_manager | autostart: true。管理対象: controller_server, planner_server, behavior_server, bt_navigator |
+| controller_server | DWB (`dwb_core::DWBLocalPlanner`)。max_vel_x/y=0.5, max_vel_theta=1.0 |
+| DWB メカナム対応 | `min_vel_y: -0.5 / max_vel_y: 0.5` + `vy_samples: 10` で Y 方向速度を有効化 |
+| DWB critics | RotateToGoal, Oscillation, BaseObstacle, GoalAlign, PathAlign, PathDist, GoalDist |
+| planner_server | NavfnPlanner (A*: `use_astar: true`, tolerance: 0.5m) |
+| behavior_server | spin, backup, wait |
+| フットプリント | `[[0.22, 0.29], [-0.22, 0.29], [-0.22, -0.29], [0.22, -0.29]]`（計算値。要実測調整） |
+| コストマップ | scan_topic: `/scan_filtered`, inflation_radius: 0.55m, resolution: 0.05m |
+| local_costmap | rolling_window: true, 3m×3m |
+
+**注意事項（調整が必要な箇所）**:
+1. `footprint`: 現在は計算値（L_X+0.05m × L_Y+0.05m）。実機外形を実測して調整すること
+2. `max_vel_x/y`: 0.5 m/s は保守的な値。フィールドテスト後に上げることも可
+3. `inflation_radius: 0.55m`: 壁衝突が多い場合は増やす。障害物を過剰回避する場合は減らす
+4. `RotateToGoal` critic: メカナムでは不要な場合がある。目標到達精度が悪い場合は scale を 0 に設定
+5. `behavior_server` の名称: ROS2 Jazzy では `behavior_server`。起動エラー時は `recoveries_server` に変更
+
+**次: Step 2 で auto_nav_launch.py に Nav2 を組み込む**
+
+```bash
+# Step 2 完了後の検証コマンド
+ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+ros2 action list          # /navigate_to_pose, /follow_waypoints が存在するか
+ros2 topic list | grep costmap  # /global_costmap/costmap, /local_costmap/costmap
+ros2 service call /lifecycle_manager_navigation/is_active nav2_msgs/srv/ManageLifecycleNodes '{}'
+```
+
+---
+
+#### フェーズ6 Step 2: auto_nav_launch.py へ Nav2 組み込み
+
+**ステータス: ✅ 完了**
+
+**変更ファイル**:
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `src/auto_nav/launch/auto_nav_launch.py` | nav2_params パス変数追加・nav2_launch（IncludeLaunchDescription）追加・LaunchDescription に追加・docstring 更新 |
+| `src/auto_nav/package.xml` | `<exec_depend>nav2_bringup</exec_depend>` 追加 |
+
+**設計選択**:
+- `nav2_bringup/launch/navigation_launch.py` を使用（`bringup_launch.py` は map_server + AMCL を含むため不使用）
+- slam_toolbox が /map を配信済みのため map_server は不要
+- lifecycle_manager_navigation の `autostart: true` により起動後に自動で Nav2 ノードを activate
+- slam_toolbox よりも Nav2 の起動が先になるが、global_costmap の static_layer が /map 出現を待機するため問題なし（追加の遅延タイマーは不要）
+
+**ビルドコマンド**:
+```bash
+colcon build --packages-select auto_nav --symlink-install
+source install/setup.bash
+```
+
+**動作確認結果（2026-02-25 実機確認済み）** ✅
+
+| 確認項目 | 結果 |
+|----------|------|
+| 全 Nav2 ノード lifecycle | active（8ノード全て確認） |
+| `/navigate_to_pose` ActionServer | ✅ 存在 |
+| `/follow_waypoints` ActionServer | ✅ 存在 |
+| global_costmap | ✅ 配信中（1149×540 cells, 0.05m/cell, slam_toolbox のマップと一致） |
+| local_costmap | ✅ 配信中 |
+
+**トラブルシューティング記録（ROS2 Jazzy / Nav2 1.x 特有）**:
+
+1. `collision_monitor`: `observation_sources` 未定義で configure 失敗 → params 追加で解決
+2. `bt_navigator`: `plugin_lib_names` を明示すると BT ノード ID が二重登録されて FATAL エラー
+   → `plugin_lib_names` を削除（ビルトインプラグインは自動ロードされる）
+3. `docking_server`: `dock_plugins` 未定義で configure 失敗 → params 追加で解決
+4. ROS2 Jazzy の `navigation_launch.py` は 10ノードを管理（旧版より多い）:
+   `controller_server`, `smoother_server`, `planner_server`, `route_server`,
+   `behavior_server`, `velocity_smoother`, `collision_monitor`, `bt_navigator`,
+   `waypoint_follower`, `docking_server`
+
+**動作確認コマンド**:
+```bash
+# 起動
+ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+
+# 全ノードの lifecycle 状態確認
+for node in controller_server planner_server behavior_server bt_navigator \
+    velocity_smoother collision_monitor waypoint_follower docking_server; do
+  echo -n "$node: "
+  ros2 service call /${node}/get_state lifecycle_msgs/srv/GetState 2>/dev/null \
+    | grep -o "label='[^']*'" | head -1
+done
+# 期待: 全ノード label='active'
+
+# ActionServer 確認
+ros2 action list
+# 期待: /navigate_to_pose, /follow_waypoints が存在
+```

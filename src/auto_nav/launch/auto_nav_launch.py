@@ -1,20 +1,29 @@
 """
-マッピング用ランチファイル
+自律走行用ランチファイル（ローカリゼーションモード）
 
-起動するノード:
-  - micro_ros_agent        (ESP32 ↔ ROS2 ブリッジ, /dev/ttyUSB0)
-  - ydlidar_ros2_driver    (LiDAR)
-  - static_tf              (base_link → laser_frame)
-  - laser_filter           (/scan → /scan_filtered, タイヤ映り込み除去)
-  - slam_toolbox           (mapping モード, /scan_filtered + /odom → /map + TF)
-  - robot_control          (Bluetooth手動操縦 + ESP32制御)
-  - bt_communication       (Bluetooth GATT サーバー)
-  - auto_nav odometry      (wheel_feedback → /odom + TF)
-  - auto_nav cmd_vel_bridge(/cmd_vel → wheel_control, auto モード時のみ有効)
+事前にマッピングを完了し、地図を保存してから使用する:
+  ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
+    "filename: '/home/taiga/maps/field'"
+  → field.posegraph / field.data が生成される
 
 使い方:
-  ros2 launch auto_nav mapping_launch.py
-  ros2 launch auto_nav mapping_launch.py serial_port:=/dev/ttyUSB1  # ポートを変える場合
+  ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+  ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field serial_port:=/dev/ttyUSB1
+
+起動するノード:
+  - micro_ros_agent        (ESP32 ↔ ROS2 ブリッジ)
+  - ydlidar_ros2_driver    (LiDAR)
+  - static_tf              (base_link → laser_frame)
+  - laser_filter           (/scan → /scan_filtered)
+  - odometry_node          (wheel_feedback → /odom + TF)
+  - cmd_vel_bridge_node    (/cmd_vel → wheel_control, auto モード時のみ)
+  - slam_toolbox           (localization モード, 保存済み地図で自己位置推定)
+  - nav2_bringup           (controller_server / planner_server / behavior_server / bt_navigator)
+  - robot_control          (Bluetooth 手動操縦 + ESP32 制御)
+  - bt_communication       (Bluetooth GATT サーバー)
+
+TODO (フェーズ5):
+  - routing_node           (Bluetooth → NavigateToPose)
 """
 
 import os
@@ -27,19 +36,12 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
-# bt_communication は bumble を .venv で管理しているため、
-# そのノードにだけ PYTHONPATH を通してシステム Python から bumble を参照できるようにする
-# __file__ は install/auto_nav/share/auto_nav/launch/ に置かれるため、
-# 5段上がると workspace root になる
 _BT_VENV_SITE_PACKAGES = os.path.normpath(
     os.path.join(
         os.path.dirname(__file__),
         "../../../../../src/bt_communication/.venv/lib/python3.12/site-packages",
     )
 )
-
-# 既存の PYTHONPATH を保ちつつ venv を先頭に追加する
-# (上書きすると bt_communication モジュール自体が見えなくなる)
 _existing = os.environ.get("PYTHONPATH", "")
 _BT_PYTHONPATH = _BT_VENV_SITE_PACKAGES + (":" + _existing if _existing else "")
 
@@ -47,7 +49,13 @@ _BT_PYTHONPATH = _BT_VENV_SITE_PACKAGES + (":" + _existing if _existing else "")
 def generate_launch_description():
     auto_nav_share = get_package_share_directory("auto_nav")
     laser_filters_config = os.path.join(auto_nav_share, "config", "laser_filters.yaml")
-    slam_params = os.path.join(auto_nav_share, "config", "slam_mapping_params.yaml")
+    slam_params = os.path.join(auto_nav_share, "config", "slam_localization_params.yaml")
+    nav2_params = os.path.join(auto_nav_share, "config", "nav2_params.yaml")
+
+    map_arg = DeclareLaunchArgument(
+        "map",
+        description="保存済みマップのパス（拡張子なし）。例: /home/taiga/maps/field",
+    )
 
     serial_port_arg = DeclareLaunchArgument(
         "serial_port",
@@ -93,21 +101,24 @@ def generate_launch_description():
         )
     )
 
-    robot_control_node = Node(
-        package="robot_control",
-        executable="launch.py",
-        name="robot_control_node",
+    static_tf_node = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="static_tf_base_to_laser",
+        arguments=["0.0", "0.0", "0.15", "0.0", "0.0", "0.0", "base_link", "laser_frame"],
         output="screen",
-        emulate_tty=True,
     )
 
-    bt_communication_node = Node(
-        package="bt_communication",
-        executable="launch.py",
-        name="bt_communication_node",
+    laser_filter_node = Node(
+        package="laser_filters",
+        executable="scan_to_scan_filter_chain",
+        parameters=[laser_filters_config],
+        remappings=[
+            ("scan", "/scan"),
+            ("scan_filtered", "/scan_filtered"),
+        ],
         output="screen",
         emulate_tty=True,
-        additional_env={"PYTHONPATH": _BT_PYTHONPATH},
     )
 
     odometry_node = Node(
@@ -126,44 +137,21 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
-    # LiDAR の TF: base_link → laser_frame
-    # 値はロボット実機のLiDAR取付位置に合わせて調整すること
-    #   x, y: ロボット中心からの水平オフセット [m]（中心なら 0.0, 0.0）
-    #   z: 取付高さ [m]（地面からではなくロボット基準座標からの高さ）
-    static_tf_node = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="static_tf_base_to_laser",
-        arguments=["0.0", "0.0", "0.15", "0.0", "0.0", "0.0", "base_link", "laser_frame"],
-        output="screen",
-    )
-
-    # タイヤ映り込みフィルタ: /scan → /scan_filtered
-    # ロボット中心から 0.32m 以内の点を除去（タイヤは ~0.30m）
-    laser_filter_node = Node(
-        package="laser_filters",
-        executable="scan_to_scan_filter_chain",
-        parameters=[laser_filters_config],
-        remappings=[
-            ("scan", "/scan"),
-            ("scan_filtered", "/scan_filtered"),
+    # slam_toolbox をローカリゼーションモードで起動
+    # map_file_name はローンチ引数 map:= で上書きする
+    slam_toolbox_node = Node(
+        package="slam_toolbox",
+        executable="async_slam_toolbox_node",
+        name="slam_toolbox",
+        parameters=[
+            slam_params,
+            {"map_file_name": LaunchConfiguration("map")},
         ],
         output="screen",
         emulate_tty=True,
     )
 
-    slam_toolbox_node = Node(
-        package="slam_toolbox",
-        executable="async_slam_toolbox_node",
-        name="slam_toolbox",
-        parameters=[slam_params],
-        output="screen",
-        emulate_tty=True,
-    )
-
-    # slam_toolbox はライフサイクルノードだが ros2 lifecycle コマンドはデーモン経由で
-    # 検出できないため、ros2 service call でサービスを直接呼び出す。
-    # ros2 service call はサービスが現れるまで自動で待機するため、タイマーの初期遅延のみ必要。
+    # マッピング時と同様に ros2 service call でライフサイクル管理
     slam_lifecycle = TimerAction(
         period=3.0,
         actions=[
@@ -181,8 +169,45 @@ def generate_launch_description():
         ],
     )
 
+    # nav2_bringup/navigation_launch.py: controller_server / planner_server /
+    # behavior_server / bt_navigator + lifecycle_manager_navigation を起動する。
+    # bringup_launch.py（map_server + AMCL 含む）は使わない。
+    # /map は slam_toolbox が配信済みのため不要。
+    nav2_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("nav2_bringup"),
+                "launch",
+                "navigation_launch.py",
+            )
+        ),
+        launch_arguments={
+            "use_sim_time": "false",
+            "params_file": nav2_params,
+            "autostart": "true",
+        }.items(),
+    )
+
+    robot_control_node = Node(
+        package="robot_control",
+        executable="launch.py",
+        name="robot_control_node",
+        output="screen",
+        emulate_tty=True,
+    )
+
+    bt_communication_node = Node(
+        package="bt_communication",
+        executable="launch.py",
+        name="bt_communication_node",
+        output="screen",
+        emulate_tty=True,
+        additional_env={"PYTHONPATH": _BT_PYTHONPATH},
+    )
+
     return LaunchDescription(
         [
+            map_arg,
             serial_port_arg,
             transport_arg,
             micro_ros_agent_serial,
@@ -193,6 +218,7 @@ def generate_launch_description():
             odometry_node,
             slam_toolbox_node,
             slam_lifecycle,
+            nav2_launch,
             robot_control_node,
             bt_communication_node,
             cmd_vel_bridge_node,

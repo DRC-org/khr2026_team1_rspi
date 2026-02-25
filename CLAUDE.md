@@ -90,9 +90,12 @@ uv venv --system-site-packages
 ### 全ノード一括起動（マッピング用・通常使用）
 
 ```bash
+# シリアル接続（デフォルト, USB）
 ros2 launch auto_nav mapping_launch.py
 # ESP32 が /dev/ttyUSB1 の場合:
 ros2 launch auto_nav mapping_launch.py serial_port:=/dev/ttyUSB1
+# Wi-Fi 接続（UDP, port 8888）
+ros2 launch auto_nav mapping_launch.py transport:=udp4
 ```
 
 ### bt_communication 単独実行時
@@ -124,9 +127,11 @@ ros2 topic pub /nav_mode std_msgs/String "data: 'manual'" --once
 ros2 topic pub /cmd_vel geometry_msgs/Twist \
   "{linear: {x: 0.2, y: 0.0, z: 0.0}, angular: {z: 0.0}}" --once
 
-# SLAM 地図保存
-ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \
-  "name: {data: '/home/taiga/maps/field'}"
+# SLAM 地図保存（slam_toolbox ネイティブ形式 .posegraph + .data）
+# ※ save_map は nav2_map_saver が必要で失敗する。serialize_map を使うこと
+mkdir -p /home/taiga/maps
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
+  "filename: '/home/taiga/maps/field'"
 ```
 
 ---

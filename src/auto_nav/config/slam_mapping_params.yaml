@@ -16,7 +16,7 @@ slam_toolbox:
     scan_topic: /scan_filtered   # タイヤ映り込みを除去したスキャン
 
     mode: mapping
-    use_map_saver: true
+    use_map_saver: false  # nav2_map_saver 未インストールのため false。保存は serialize_map を使う
 
     debug_logging: false
     throttle_scans: 1
@@ -28,7 +28,7 @@ slam_toolbox:
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
-    enable_interactive_mode: true
+    enable_interactive_mode: false  # ヘッドレス RPi では不要・CPU 節約のため false
 
     # スキャンマッチング
     use_scan_matching: true

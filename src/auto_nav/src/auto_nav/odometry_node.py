@@ -7,6 +7,7 @@ from rclpy.node import Node
 from robot_msgs.msg import WheelMessage
 from tf2_ros import TransformBroadcaster
 
+
 # robot_control/constants.py と同じ値を使う
 WHEEL_RADIUS = 0.04925  # タイヤ半径 [m]
 GEAR_RATIO = 19.20320855614973  # ギア比
@@ -80,9 +81,12 @@ class OdometryNode(Node):
         omega = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # 角速度 [rad/s]（反時計が正）
 
         # デッドレコニング積分（オイラー法）
+        # 位置積分には更新前の theta を使う（theta_old）
+        # 先に theta を使うと積分タイミングがずれ、回転中に誤差が蓄積する
+        theta_old = self._theta
         self._theta += omega * dt
-        self._x += (vx * math.cos(self._theta) - vy * math.sin(self._theta)) * dt
-        self._y += (vx * math.sin(self._theta) + vy * math.cos(self._theta)) * dt
+        self._x += (vx * math.cos(theta_old) - vy * math.sin(theta_old)) * dt
+        self._y += (vx * math.sin(theta_old) + vy * math.cos(theta_old)) * dt
 
         # θ から四元数（z軸回転のみ）
         qz = math.sin(self._theta / 2.0)
@@ -111,9 +115,26 @@ class OdometryNode(Node):
         odom.pose.pose.orientation.z = qz
         odom.pose.pose.orientation.w = qw
 
+        # 共分散行列（6x6 = 36要素, row-major）
+        # 2D 走行のため z/roll/pitch 成分は大きな値（実質未知）にする
+        # インデックス: 0=x,x  7=y,y  14=z,z  21=rr  28=pp  35=yaw,yaw
+        odom.pose.covariance[0] = 0.01    # x [m^2]
+        odom.pose.covariance[7] = 0.01    # y [m^2]
+        odom.pose.covariance[14] = 1e6    # z (unused in 2D)
+        odom.pose.covariance[21] = 1e6    # roll (unused in 2D)
+        odom.pose.covariance[28] = 1e6    # pitch (unused in 2D)
+        odom.pose.covariance[35] = 0.05   # yaw [rad^2]
+
         odom.twist.twist.linear.x = vx
         odom.twist.twist.linear.y = vy
         odom.twist.twist.angular.z = omega
+
+        odom.twist.covariance[0] = 0.01   # vx [m^2/s^2]
+        odom.twist.covariance[7] = 0.01   # vy [m^2/s^2]
+        odom.twist.covariance[14] = 1e6
+        odom.twist.covariance[21] = 1e6
+        odom.twist.covariance[28] = 1e6
+        odom.twist.covariance[35] = 0.05  # omega [rad^2/s^2]
 
         self._pub_odom.publish(odom)
 
@@ -127,3 +148,19 @@ class OdometryNode(Node):
         tf.transform.rotation.z = qz
         tf.transform.rotation.w = qw
         self._tf_br.sendTransform(tf)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = OdometryNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
