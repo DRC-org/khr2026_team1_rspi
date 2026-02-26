@@ -70,6 +70,16 @@
 **注意:** `publish_rate` パラメータではなく wheel_feedback の受信レートで駆動する（タイマー駆動ではない）。
 計画値 50Hz とは異なるが slam_toolbox の動作に問題なし。
 
+**IMU による角速度補正:**
+`wheel_feedback.lsm9ds1_values` に IMU データが含まれる場合、ジャイロ Z 軸（`gz`）を角速度として使用する。
+タイヤスリップ時にエンコーダ由来の omega が誤差を持つ問題を抑制し、旋回精度を向上させる。
+IMU 未接続時はエンコーダ由来の omega にフォールバックする。
+
+注意事項:
+- `gz` の符号は IMU の取付向きに依存する（Z 上向き・右手系なら正 = CCW）
+- `gz` の単位は ESP32 ファームウェアに合わせること（rad/s を前提。deg/s の場合は × π/180 が必要）
+- 絶対 `yaw`（地磁気融合）は屋内での磁気干渉で信頼性が低いため使用しない
+
 ---
 
 ### フェーズ 2: cmd_vel ブリッジノード ✅ 完了
@@ -469,6 +479,22 @@ sudo apt install \
 地図保存で判明した注意点:
 - `save_map` は nav2_map_saver が必要で **result=255 で失敗する**
 - 正しいコマンドは `serialize_map`（slam_toolbox ネイティブ形式）を使うこと
+
+---
+
+### 2026-02-26
+
+**laser_frame TF の修正** ✅
+- 位置引数（`x y z yaw pitch roll`）の順序バグを名前付き引数（`--yaw`, `--pitch` 等）に変更して修正
+- LiDAR 取付角ずれ: `--yaw 1.5708`（0度方向がロボット左向き）
+- LiDAR 上下反転: `--pitch 3.14159`（上下反転によるY軸ミラーを補正）
+- 変更ファイル: `mapping_launch.py`, `auto_nav_launch.py`
+
+**IMU による角速度補正** ✅
+- `odometry_node.py`: `wheel_feedback.lsm9ds1_values` が存在する場合、`gz`（ジャイロ Z 軸）を omega として使用
+- タイヤスリップ時のエンコーダ誤差を抑制し、旋回精度を向上
+- IMU 未接続時はエンコーダ由来の omega にフォールバック
+- 注意: `gz` の符号・単位（rad/s か deg/s か）は ESP32 ファームウェアで確認すること
 
 ---
 

@@ -78,7 +78,15 @@ class OdometryNode(Node):
         # 前進運動学: 車輪速度 → ロボット機体速度
         vx = (v_fl - v_fr + v_rl - v_rr) / 4.0  # 前後速度 [m/s]
         vy = (v_fl + v_fr - v_rl - v_rr) / 4.0  # 左右速度 [m/s]（左が正）
-        omega = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # 角速度 [rad/s]（反時計が正）
+        omega_enc = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # エンコーダ由来の角速度
+
+        # タイヤスリップ時のエンコーダ誤差を補正するため、IMU ジャイロを優先使用する。
+        # gz の符号: IMU の Z 軸が上向き・右手系なら正 = CCW。取付向きによって反転する場合あり。
+        # gz の単位: ESP32 ファームウェアが rad/s で送信していること（deg/s なら π/180 の変換が必要）
+        if msg.lsm9ds1_values:
+            omega = msg.lsm9ds1_values[0].gz
+        else:
+            omega = omega_enc
 
         # デッドレコニング積分（オイラー法）
         # 位置積分には更新前の theta を使う（theta_old）
