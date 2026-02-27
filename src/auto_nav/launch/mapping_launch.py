@@ -9,7 +9,10 @@
   - slam_toolbox           (mapping モード, /scan_filtered + /odom → /map + TF)
   - robot_control          (Bluetooth手動操縦 + ESP32制御)
   - bt_communication       (Bluetooth GATT サーバー)
-  - auto_nav odometry      (wheel_feedback → /odom + TF)
+  - auto_nav odometry      (wheel_feedback → /odom_raw, エンコーダのみ)
+  - auto_nav imu_publisher (wheel_feedback → /imu, gyro/accel)
+  - scan_odometry_node     (/scan_filtered → /scan_odom, LiDAR scan-to-scan)
+  - ekf_filter_node        (/odom_raw + /imu + /scan_odom → /odom + TF(odom→base_link))
   - auto_nav cmd_vel_bridge(/cmd_vel → wheel_control, auto モード時のみ有効)
 
 使い方:
@@ -48,6 +51,7 @@ def generate_launch_description():
     auto_nav_share = get_package_share_directory("auto_nav")
     laser_filters_config = os.path.join(auto_nav_share, "config", "laser_filters.yaml")
     slam_params = os.path.join(auto_nav_share, "config", "slam_mapping_params.yaml")
+    ekf_params = os.path.join(auto_nav_share, "config", "ekf_params.yaml")
 
     serial_port_arg = DeclareLaunchArgument(
         "serial_port",
@@ -116,6 +120,52 @@ def generate_launch_description():
         name="odometry_node",
         output="screen",
         emulate_tty=True,
+    )
+
+    imu_publisher_node = Node(
+        package="auto_nav",
+        executable="launch_imu_publisher.py",
+        name="imu_publisher_node",
+        output="screen",
+        emulate_tty=True,
+    )
+
+    # LiDAR scan-to-scan オドメトリ（icp_odometry, rtabmap_odom）
+    # /scan_filtered からスキャンマッチングで絶対姿勢を推定し /scan_odom に配信する。
+    # EKF が yaw を差分モードで取り込み、エンコーダ/IMU と融合する。
+    scan_odometry_node = Node(
+        package="rtabmap_odom",
+        executable="icp_odometry",
+        name="scan_odometry_node",
+        output="screen",
+        emulate_tty=True,
+        parameters=[{
+            "frame_id": "base_link",
+            "odom_frame_id": "odom",
+            "subscribe_scan": True,
+            "publish_tf": False,           # TF は EKF が担当
+            "Odom/Strategy": "0",          # Frame-to-Frame（scan-to-scan）
+            "Odom/GuessMotion": "true",    # 前フレームの速度を初期推定に利用
+            "Icp/PointToPlane": "false",   # 2D スキャン（ノーマルなし）
+            "Icp/MaxCorrespondenceDistance": "0.5",
+            "Icp/Iterations": "10",
+            "Icp/MaxTranslation": "1.0",
+            "Icp/MaxRotation": "0.785",    # 45°/update を上限
+        }],
+        remappings=[
+            ("scan", "/scan_filtered"),
+            ("odom", "/scan_odom"),
+        ],
+    )
+
+    ekf_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        emulate_tty=True,
+        parameters=[ekf_params],
+        remappings=[("odometry/filtered", "/odom")],
     )
 
     cmd_vel_bridge_node = Node(
@@ -195,6 +245,9 @@ def generate_launch_description():
             static_tf_node,
             laser_filter_node,
             odometry_node,
+            imu_publisher_node,
+            scan_odometry_node,
+            ekf_node,
             slam_toolbox_node,
             slam_lifecycle,
             robot_control_node,

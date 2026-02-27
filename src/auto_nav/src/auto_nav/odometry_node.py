@@ -1,11 +1,9 @@
 import math
 
 import rclpy
-from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from robot_msgs.msg import WheelMessage
-from tf2_ros import TransformBroadcaster
 
 
 # robot_control/constants.py と同じ値を使う
@@ -23,7 +21,7 @@ class OdometryNode(Node):
     """
     wheel_feedback (WheelMessage) を受け取り、
     4輪オムニの前進運動学でロボット速度を計算し、
-    /odom と TF (odom → base_link) を配信するノード。
+    /odom_raw を配信するノード。TF(odom→base_link) は ekf_filter_node が担当する。
 
     前進運動学（逆運動学の疑似逆行列から導出）:
         v_fl = Vx + Vy - G*ω
@@ -42,8 +40,7 @@ class OdometryNode(Node):
         self._sub = self.create_subscription(
             WheelMessage, "wheel_feedback", self._on_feedback, 10
         )
-        self._pub_odom = self.create_publisher(Odometry, "/odom", 10)
-        self._tf_br = TransformBroadcaster(self)
+        self._pub_odom = self.create_publisher(Odometry, "/odom_raw", 10)
 
         # デッドレコニング状態
         self._x = 0.0
@@ -78,16 +75,7 @@ class OdometryNode(Node):
         # 前進運動学: 車輪速度 → ロボット機体速度
         vx = (v_fl - v_fr + v_rl - v_rr) / 4.0  # 前後速度 [m/s]
         vy = (v_fl + v_fr - v_rl - v_rr) / 4.0  # 左右速度 [m/s]（左が正）
-        omega_enc = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # エンコーダ由来の角速度
-
-        # 静止時は gyro バイアスが積分されて誤差が蓄積するため、車輪が動いているときのみ
-        # IMU gz で補正する。omega_enc ≈ 0 なら確実に静止 → エンコーダ値(正確に0)を優先。
-        # gz の単位: LSM9DS1 は dps（度/秒）で出力するため rad/s に変換する。
-        # gz の符号: IMU Z 軸が上向き右手系なら正 = CCW（取付向きにより反転の可能性あり）
-        if msg.lsm9ds1_values and abs(omega_enc) > 0.01:
-            omega = msg.lsm9ds1_values[0].gz * math.pi / 180.0
-        else:
-            omega = omega_enc
+        omega = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # 角速度 [rad/s]
 
         # デッドレコニング積分（オイラー法）
         # 位置積分には更新前の theta を使う（theta_old）
@@ -103,7 +91,6 @@ class OdometryNode(Node):
         stamp = now.to_msg()
 
         self._publish_odom(stamp, vx, vy, omega, qz, qw)
-        self._broadcast_tf(stamp, qz, qw)
 
     def _publish_odom(
         self,
@@ -132,7 +119,7 @@ class OdometryNode(Node):
         odom.pose.covariance[14] = 1e6    # z (unused in 2D)
         odom.pose.covariance[21] = 1e6    # roll (unused in 2D)
         odom.pose.covariance[28] = 1e6    # pitch (unused in 2D)
-        odom.pose.covariance[35] = 0.05   # yaw [rad^2]
+        odom.pose.covariance[35] = 0.1    # yaw [rad^2]（IMU融合を EKF に委譲するため不確実性を増やす）
 
         odom.twist.twist.linear.x = vx
         odom.twist.twist.linear.y = vy
@@ -143,20 +130,9 @@ class OdometryNode(Node):
         odom.twist.covariance[14] = 1e6
         odom.twist.covariance[21] = 1e6
         odom.twist.covariance[28] = 1e6
-        odom.twist.covariance[35] = 0.05  # omega [rad^2/s^2]
+        odom.twist.covariance[35] = 0.1   # omega [rad^2/s^2]（同上）
 
         self._pub_odom.publish(odom)
-
-    def _broadcast_tf(self, stamp, qz: float, qw: float) -> None:
-        tf = TransformStamped()
-        tf.header.stamp = stamp
-        tf.header.frame_id = "odom"
-        tf.child_frame_id = "base_link"
-        tf.transform.translation.x = self._x
-        tf.transform.translation.y = self._y
-        tf.transform.rotation.z = qz
-        tf.transform.rotation.w = qw
-        self._tf_br.sendTransform(tf)
 
 
 def main(args=None):

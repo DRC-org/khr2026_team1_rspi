@@ -15,15 +15,16 @@
   - ydlidar_ros2_driver    (LiDAR)
   - static_tf              (base_link → laser_frame)
   - laser_filter           (/scan → /scan_filtered)
-  - odometry_node          (wheel_feedback → /odom + TF)
+  - odometry_node          (wheel_feedback → /odom_raw, エンコーダのみ)
+  - imu_publisher_node     (wheel_feedback → /imu, gyro/accel)
+  - scan_odometry_node     (/scan_filtered → /scan_odom, LiDAR scan-to-scan)
+  - ekf_filter_node        (/odom_raw + /imu + /scan_odom → /odom + TF(odom→base_link))
   - cmd_vel_bridge_node    (/cmd_vel → wheel_control, auto モード時のみ)
   - slam_toolbox           (localization モード, 保存済み地図で自己位置推定)
   - nav2_bringup           (controller_server / planner_server / behavior_server / bt_navigator)
+  - routing_node           (Bluetooth → NavigateToPose, nav_mode 切り替え)
   - robot_control          (Bluetooth 手動操縦 + ESP32 制御)
   - bt_communication       (Bluetooth GATT サーバー)
-
-TODO (フェーズ5):
-  - routing_node           (Bluetooth → NavigateToPose)
 """
 
 import os
@@ -51,6 +52,7 @@ def generate_launch_description():
     laser_filters_config = os.path.join(auto_nav_share, "config", "laser_filters.yaml")
     slam_params = os.path.join(auto_nav_share, "config", "slam_localization_params.yaml")
     nav2_params = os.path.join(auto_nav_share, "config", "nav2_params.yaml")
+    ekf_params = os.path.join(auto_nav_share, "config", "ekf_params.yaml")
 
     map_arg = DeclareLaunchArgument(
         "map",
@@ -133,6 +135,49 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
+    imu_publisher_node = Node(
+        package="auto_nav",
+        executable="launch_imu_publisher.py",
+        name="imu_publisher_node",
+        output="screen",
+        emulate_tty=True,
+    )
+
+    scan_odometry_node = Node(
+        package="rtabmap_odom",
+        executable="icp_odometry",
+        name="scan_odometry_node",
+        output="screen",
+        emulate_tty=True,
+        parameters=[{
+            "frame_id": "base_link",
+            "odom_frame_id": "odom",
+            "subscribe_scan": True,
+            "publish_tf": False,
+            "Odom/Strategy": "0",
+            "Odom/GuessMotion": "true",
+            "Icp/PointToPlane": "false",
+            "Icp/MaxCorrespondenceDistance": "0.5",
+            "Icp/Iterations": "10",
+            "Icp/MaxTranslation": "1.0",
+            "Icp/MaxRotation": "0.785",
+        }],
+        remappings=[
+            ("scan", "/scan_filtered"),
+            ("odom", "/scan_odom"),
+        ],
+    )
+
+    ekf_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_filter_node",
+        output="screen",
+        emulate_tty=True,
+        parameters=[ekf_params],
+        remappings=[("odometry/filtered", "/odom")],
+    )
+
     cmd_vel_bridge_node = Node(
         package="auto_nav",
         executable="launch_cmd_vel_bridge.py",
@@ -192,6 +237,14 @@ def generate_launch_description():
         }.items(),
     )
 
+    routing_node = Node(
+        package="auto_nav",
+        executable="launch_routing.py",
+        name="routing_node",
+        output="screen",
+        emulate_tty=True,
+    )
+
     robot_control_node = Node(
         package="robot_control",
         executable="launch.py",
@@ -220,9 +273,13 @@ def generate_launch_description():
             static_tf_node,
             laser_filter_node,
             odometry_node,
+            imu_publisher_node,
+            scan_odometry_node,
+            ekf_node,
             slam_toolbox_node,
             slam_lifecycle,
             nav2_launch,
+            routing_node,
             robot_control_node,
             bt_communication_node,
             cmd_vel_bridge_node,

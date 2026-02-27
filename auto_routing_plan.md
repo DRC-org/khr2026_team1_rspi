@@ -199,46 +199,69 @@ ros2 topic pub /check_waypoint geometry_msgs/PoseStamped \
 
 ---
 
-### フェーズ 5: 自律走行ノード（未着手）
+### フェーズ 5: 自律走行ノード ✅ 完了（2026-02-27）
 
 Bluetooth コマンドを受け取り、Nav2 ActionClient でゴールを送信する制御ノード。
 
-**ファイル:** `src/auto_nav/src/auto_nav/routing_node.py`
+**ファイル:**
+- `src/auto_nav/src/auto_nav/routing_node.py`
+- `src/auto_nav/scripts/launch_routing.py`
 
-```python
-# サブスクライブ: bluetooth_rx (String)
-# パブリッシュ: bluetooth_tx (String), /nav_mode (String)
-# ActionClient: /navigate_to_pose (nav2_msgs/NavigateToPose)
-
-# Bluetooth コマンド:
-# {"type": "nav_mode", "mode": "auto"}          # 自律走行モードへ
-# {"type": "nav_mode", "mode": "manual"}         # 手動モードへ
-# {"type": "nav_goal", "waypoint": "goal_A"}     # ウェイポイント名で指定
-# {"type": "nav_goal", "x": 1.5, "y": 0.0, "theta": 0.0}  # 座標直接指定
+**Bluetooth コマンド仕様:**
+```json
+{"type": "nav_mode", "mode": "auto"}           // 自律走行モードへ
+{"type": "nav_mode", "mode": "manual"}          // 手動モードへ（走行中はゴールキャンセル）
+{"type": "nav_goal", "waypoint": "waypoint_1"}  // ウェイポイント名でゴール指定
+{"type": "nav_goal", "x": 1.5, "y": 0.0, "theta": 0.0}  // 直接座標でゴール指定
 ```
 
-**状態管理:**
-- `MANUAL` → `AUTO_IDLE` → `NAVIGATING` → `ARRIVED` → `AUTO_IDLE`
+**bluetooth_tx フィードバック:**
+```json
+{"nav_status": "mode",       "mode": "auto"}
+{"nav_status": "navigating", "waypoint": "waypoint_1"}
+{"nav_status": "arrived",    "waypoint": "waypoint_1"}
+{"nav_status": "cancelled"}
+{"nav_status": "error",      "message": "..."}
+```
 
-**確認手順:**
+**状態遷移:**
+```
+MANUAL ──nav_mode:auto──→ AUTO_IDLE ──nav_goal──→ NAVIGATING
+  ↑                          ↑                        │
+  └──nav_mode:manual─────────┘◄──────────────────────┤
+                             └────────── ARRIVED ◄───┘
+```
+
+**動作確認コマンド:**
 
 ```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
-ros2 topic echo bluetooth_tx  # 状態フィードバック監視
+ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field transport:=udp4
 
-# テスト（Bluetooth の代わりに直接パブリッシュ）
-ros2 topic pub bluetooth_rx std_msgs/String \
-  '{"data": "{\"type\": \"nav_mode\", \"mode\": \"auto\"}"}' --once
-ros2 topic pub bluetooth_rx std_msgs/String \
-  '{"data": "{\"type\": \"nav_goal\", \"waypoint\": \"goal_A\"}"}' --once
+# 別ターミナルで監視
+ros2 topic echo /bluetooth_tx
+ros2 topic echo /nav_mode
+
+# テスト送信
+ros2 topic pub /bluetooth_rx std_msgs/msg/String \
+  'data: "{\"type\": \"nav_mode\", \"mode\": \"auto\"}"' --once
+ros2 topic pub /bluetooth_rx std_msgs/msg/String \
+  'data: "{\"type\": \"nav_goal\", \"waypoint\": \"waypoint_1\"}"' --once
 ```
 
-| テスト | 合格基準 |
-|--------|---------|
-| モード切り替え | `nav_mode: auto` 送信後、bluetooth_tx に `"mode": "auto"` フィードバックが返る |
-| ゴール送信 | `nav_goal: goal_A` 送信後、NavigateToPose ActionServer にゴールが届く |
-| ARRIVED 検知 | ゴール付近到達後、bluetooth_tx に `"status": "arrived"` が返る |
-| 手動復帰 | `nav_mode: manual` 送信後、Bluetooth ジョイスティックでロボットが動く |
+**動作確認結果（2026-02-27 実機）:**
+
+| テスト | 結果 |
+|--------|------|
+| `nav_mode: auto` 送信 | ✅ bluetooth_tx に `{"nav_status":"mode","mode":"auto"}` が返る |
+| `nav_goal: waypoint_5` 送信 | ✅ ロボットが走行開始 |
+| 到達後 | ✅ bluetooth_tx に `{"nav_status":"arrived","waypoint":"waypoint_5"}` が返る |
+| `nav_mode: manual` 送信 | ✅ Bluetooth 手動操縦に戻る |
+
+**注意: DWB チューニングが必要**
+現状ふらつきながら走行するため、以下の調整を予定:
+- `max_vel_x`, `max_vel_y` の速度制限
+- `xy_goal_tolerance`, `yaw_goal_tolerance` の目標許容誤差
+- DWB critic の重みパラメータ（nav2_params.yaml 参照）
 
 ---
 
@@ -524,3 +547,73 @@ sudo apt install \
    → `plugin_lib_names` を削除（ビルトインプラグインは自動ロードされる）
 3. `collision_monitor`: `observation_sources` 未定義で configure 失敗 → params 追加で解決
 4. `docking_server`: `dock_plugins` 未定義で configure 失敗 → params 追加で解決
+
+---
+
+### 2026-02-27
+
+**EKF センサフュージョン実装** ✅
+
+タイヤスリップで odom→base_link TF が崩れる問題に対し、robot_localization の ekf_node を導入。
+エンコーダ（/odom_raw）と IMU ジャイロ（/imu）を EKF で融合し、局所オドメトリの精度を向上。
+
+**アーキテクチャ変更:**
+- `odometry_node.py`: IMU 融合・TF 配信を除去。トピック名を `/odom` → `/odom_raw` に変更（エンコーダのみ）
+- `imu_publisher_node.py`（新規）: `wheel_feedback` から LSM9DS1 gyro/accel を取り出し `/imu` に配信
+- `ekf_params.yaml`（新規）: odom_raw（vx, vy, vyaw）+ imu（gz）を融合。TF(odom→base_link) は EKF が配信
+- `mapping_launch.py` / `auto_nav_launch.py`: `imu_publisher_node` + `ekf_node` を追加
+- `package.xml`: `sensor_msgs`, `robot_localization` 依存追加
+
+**発見・修正した問題:**
+
+1. `ekf_node` のデフォルト出力トピックは `odometry/filtered`（`/odom` ではない）
+   → launch ファイルで `remappings=[("odometry/filtered", "/odom")]` を追加して解決
+
+2. 静止時に IMU gz バイアスが EKF に積分されて yaw が 0.23°/秒でドリフト
+   → `imu_publisher_node.py` に静止検出を追加
+   - エンコーダ omega が 0.01 rad/s 未満のとき gz 共分散を 0.01 → 10.0 にして EKF に無視させる
+   - 修正後: 静止時ドリフトが 0.23°/秒 → 0.001°/秒（230倍改善）✅
+
+3. `Write` ツールで作成したスクリプトに実行権限がつかない
+   → `chmod +x scripts/launch_imu_publisher.py` で解決（再ビルド不要）
+
+**動作確認結果（2026-02-27 実機）:**
+
+| 確認項目 | 結果 |
+|---------|------|
+| /odom_raw レート | ~35Hz（ESP32 送信レート） |
+| /imu レート | ~18Hz |
+| /odom（EKF 出力）レート | ~17Hz |
+| TF: odom→base_link（EKF） | 17.6Hz ✅ |
+| TF: map→odom（slam_toolbox） | 9.5Hz ✅ |
+| 静止時 yaw ドリフト | 0.01°/5秒 ✅ |
+| 360° 旋回後帰還誤差 | ~14°（slam_toolbox が大局補正） |
+
+**TF ツリー:**
+```
+map(9.5Hz) → odom → base_link(17.6Hz) → laser_frame(static)
+                 ↑ ekf_filter_node（robot_localization）
+```
+
+**SLAM マッピングパラメータ調整** ✅
+
+対角壁の重複描画・初期位置付近の二重壁を修正。
+
+| パラメータ | 旧値 | 新値 | 理由 |
+|-----------|------|------|------|
+| `link_match_minimum_response_fine` | 0.1 | **0.4** | 対角壁でスコアが低いフレームを棄却し重複描画を防止 |
+| `loop_match_minimum_response_fine` | 0.45 | **0.55** | 低品質ループクロージャを棄却し補正ジャンプ幅を縮小 |
+| `loop_match_maximum_variance_coarse` | 3.0 | **1.5** | 粗マッチングの分散上限を下げ、偽ループ候補を除外 |
+
+**初期位置付近の二重壁の根本原因:**
+ループクロージャ発動時にポーズグラフは補正されるが、補正前に書き込んだ占有グリッドの観測値は slam_toolbox のオンラインモードでは消去されない仕様のため、補正前後の壁が両方残る。ループクロージャの品質を上げることで補正量を最小化し、壁のずれを実用上無視できる程度に抑制した。
+
+**調整ガイド:**
+- 対角壁がまだ重複 → `link_match_minimum_response_fine` を 0.45 まで上げる
+- 地図が疎になる（壁が薄い）→ 0.35 まで下げる
+- ループクロージャが発動しない（地図が曲がったまま）→ `loop_match_minimum_response_fine` を 0.5 まで下げる
+
+**マッピング完了確認（2026-02-27）:**
+- 対角壁：1本線でシャープに描画 ✅
+- 初期位置付近の二重壁：解消 ✅
+- 地図保存: `field.posegraph`（5.0MB）+ `field.data`（164KB）✅
