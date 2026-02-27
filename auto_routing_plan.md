@@ -351,7 +351,7 @@ ros2 launch auto_nav mapping_launch.py
 | odometry_node + cmd_vel_bridge | ✅ |
 | slam_toolbox (localization モード) | ✅ |
 | Nav2 (nav2_bringup/navigation_launch.py 経由) | ✅ |
-| routing_node | ❌ 未実装（フェーズ5 完了後に追加） |
+| routing_node | ✅ |
 | robot_control + bt_communication | ✅ |
 
 起動コマンド:
@@ -617,3 +617,52 @@ map(9.5Hz) → odom → base_link(17.6Hz) → laser_frame(static)
 - 対角壁：1本線でシャープに描画 ✅
 - 初期位置付近の二重壁：解消 ✅
 - 地図保存: `field.posegraph`（5.0MB）+ `field.data`（164KB）✅
+
+---
+
+**フェーズ5: routing_node 実装** ✅
+
+Bluetooth コマンドを受け取り Nav2 NavigateToPose ActionServer にゴールを送信するノードを実装。
+
+**新規作成ファイル:**
+- `src/auto_nav/src/auto_nav/routing_node.py`
+- `src/auto_nav/scripts/launch_routing.py`
+
+**変更ファイル:**
+- `src/auto_nav/package.xml`: `nav2_msgs` 依存追加
+- `src/auto_nav/launch/auto_nav_launch.py`: routing_node 追加
+
+**発見・解決した問題:**
+
+1. **ActionClient + SingleThreadedExecutor でサブスクリプションコールバックが無音になる（最重要）**
+   - 症状: `bluetooth_rx` は届いている（`ros2 topic echo` で確認）のに `/nav_mode` が全く publish されない
+   - 根本原因: `ActionClient` は初期化時に Nav2 の `_action/status` トピックを受信するための Waitable を登録する。このトピックが高頻度で publish されるため、`SingleThreadedExecutor` のループで Waitable が占有され、bluetooth_rx コールバックが一切実行されない
+   - 修正: `main()` で `rclpy.spin()` → `MultiThreadedExecutor` に変更
+
+   ```python
+   from rclpy.executors import MultiThreadedExecutor
+   executor = MultiThreadedExecutor()
+   executor.add_node(node)
+   executor.spin()
+   ```
+
+2. **「ロボットが動かない」→ 実は既にウェイポイント近傍にいた**
+   - 症状: nav_goal 送信直後に `arrived` が返る
+   - 原因: `xy_goal_tolerance: 0.25m`。ロボットが waypoint_1 から 0.09m の地点にいたため Nav2 が即座に SUCCEEDED を返した
+   - 対処: ロボットを別の場所に移動してから waypoint_5（~5m 先）でテスト → 正常走行確認
+
+**FastDDS SHM エラー（無害）:**
+- `[RTPS_TRANSPORT_SHM Error] Failed init_port fastrtps_port7002: open_and_lock_file failed`
+- 原因: 強制終了したプロセスが残した古い共有メモリファイル
+- 影響なし（FastDDS が自動再作成）。気になる場合は `rm -f /tmp/fastrtps_port*`
+
+**実機動作確認（2026-02-27）:**
+
+| テスト | 結果 |
+|--------|------|
+| nav_mode: auto 送信 | ✅ /nav_mode に "auto"、bluetooth_tx に `{"nav_status":"mode","mode":"auto"}` |
+| nav_goal: waypoint_5 送信 | ✅ ロボット走行開始 |
+| 到達後 | ✅ bluetooth_tx に `{"nav_status":"arrived","waypoint":"waypoint_5"}` |
+| nav_mode: manual 送信（走行中） | ✅ ゴールキャンセル、手動操縦に復帰 |
+
+**残課題:** DWB コントローラのふらつき対策（nav2_params.yaml のチューニング）が必要
