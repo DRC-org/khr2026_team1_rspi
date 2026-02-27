@@ -80,11 +80,12 @@ class OdometryNode(Node):
         vy = (v_fl + v_fr - v_rl - v_rr) / 4.0  # 左右速度 [m/s]（左が正）
         omega_enc = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # エンコーダ由来の角速度
 
-        # タイヤスリップ時のエンコーダ誤差を補正するため、IMU ジャイロを優先使用する。
-        # gz の符号: IMU の Z 軸が上向き・右手系なら正 = CCW。取付向きによって反転する場合あり。
-        # gz の単位: ESP32 ファームウェアが rad/s で送信していること（deg/s なら π/180 の変換が必要）
-        if msg.lsm9ds1_values:
-            omega = msg.lsm9ds1_values[0].gz
+        # 静止時は gyro バイアスが積分されて誤差が蓄積するため、車輪が動いているときのみ
+        # IMU gz で補正する。omega_enc ≈ 0 なら確実に静止 → エンコーダ値(正確に0)を優先。
+        # gz の単位: LSM9DS1 は dps（度/秒）で出力するため rad/s に変換する。
+        # gz の符号: IMU Z 軸が上向き右手系なら正 = CCW（取付向きにより反転の可能性あり）
+        if msg.lsm9ds1_values and abs(omega_enc) > 0.01:
+            omega = msg.lsm9ds1_values[0].gz * math.pi / 180.0
         else:
             omega = omega_enc
 
