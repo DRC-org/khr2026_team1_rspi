@@ -666,3 +666,51 @@ Bluetooth コマンドを受け取り Nav2 NavigateToPose ActionServer にゴー
 | nav_mode: manual 送信（走行中） | ✅ ゴールキャンセル、手動操縦に復帰 |
 
 **残課題:** DWB コントローラのふらつき対策（nav2_params.yaml のチューニング）が必要
+
+---
+
+**DWB チューニング + MIN_RPM 対応** ✅
+
+変更ファイル:
+- `src/auto_nav/config/nav2_params.yaml`
+- `src/auto_nav/src/auto_nav/cmd_vel_bridge_node.py`
+
+**nav2_params.yaml の変更点（8箇所）:**
+
+| パラメータ | Before | After | 理由 |
+|-----------|--------|-------|------|
+| `general_goal_checker.xy_goal_tolerance` | 0.25 | 0.08 | ±8cm 精度目標 |
+| `general_goal_checker.yaw_goal_tolerance` | 0.25 | 0.10 | 到着時の向き精度（±6°） |
+| `FollowPath.max_vel_x` | 0.5 | 1.0 | 速度倍増 |
+| `FollowPath.max_speed_xy` | 0.5 | 1.0 | 速度倍増 |
+| `FollowPath.sim_time` | 1.7 | 1.2 | ふらつき抑制 |
+| `FollowPath.xy_goal_tolerance` | 0.25 | 0.08 | RotateToGoal トリガー精度 |
+| `FollowPath.PathAlign.scale` | 32.0 | 8.0 | ふらつきの主原因を除去 |
+| `velocity_smoother.max_velocity` | [0.5, 0.5, 1.0] | [1.0, 0.5, 1.0] | DWB 上限に合わせる |
+
+**cmd_vel_bridge_node.py の変更点:**
+- `MIN_RPM = 700.0` を追加
+- 逆運動学後の RPM が `0 < max_abs < 700` のとき、車輪比率を保ったまま 700 RPM まで底上げ
+- 目的: M3508 の静止摩擦を超えられず不動になる問題を解消
+- 700 RPM ≈ 0.19 m/s 相当。動きが速すぎる場合は値を下げて調整すること
+
+**動作確認コマンド:**
+```bash
+# 1. 起動
+ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field transport:=udp4
+
+# 2. 起動後 5 秒待ってから auto モードに切り替え
+ros2 topic pub /bluetooth_rx std_msgs/String \
+  '{data: "{\"type\": \"nav_mode\", \"mode\": \"auto\"}"}' --once
+
+# 3. waypoint をセット（nav_goal → "navigating" 応答まで 5〜8 秒かかる場合あり）
+ros2 topic pub /bluetooth_rx std_msgs/String \
+  '{data: "{\"type\": \"nav_goal\", \"waypoint\": \"waypoint_1\"}"}' --once
+
+# 4. bluetooth_tx で "navigating" → "arrived" を確認
+ros2 topic echo /bluetooth_tx
+```
+
+**注意事項:**
+- nav_goal 送信後、ロボットが動き出すまで 5〜8 秒かかる（ActionClient の wait_for_server のため）
+- MIN_RPM=700 はチューニング値。速すぎる・止まれない場合は下げること

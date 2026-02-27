@@ -13,6 +13,8 @@ L_X = 0.1725
 L_Y = 0.2425
 G = L_X + L_Y
 MAX_RPM = 4000.0
+# M3508 が電流不足で不動になるのを防ぐ最小 RPM（静止摩擦を超えるしきい値）
+MIN_RPM = 700.0
 
 MS_TO_RPM = (60.0 * GEAR_RATIO) / (2.0 * math.pi * WHEEL_RADIUS)
 
@@ -76,6 +78,10 @@ class CmdVelBridgeNode(Node):
         max_abs = max(abs(r) for r in rpms)
         if max_abs > MAX_RPM:
             scale = MAX_RPM / max_abs
+            rpms = [r * scale for r in rpms]
+        elif 0 < max_abs < MIN_RPM:
+            # 車輪比率を保ったまま MIN_RPM まで底上げ（静止摩擦対策）
+            scale = MIN_RPM / max_abs
             rpms = [r * scale for r in rpms]
 
         self._publish_rpms(*rpms)
