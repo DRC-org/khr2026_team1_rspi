@@ -386,6 +386,374 @@ ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
 
 ---
 
+### フェーズ 8: Web コントロールシステム（未着手）
+
+**背景:** 競技規則により試合中は一切の外部通信が禁止。Bluetooth コントローラは自動制御失敗時の手動フォールバック専用とし、通常運用は以下の構成に移行する。
+
+```
+[ブラウザ (localhost:8080)]
+        ↕ HTTP (静的ファイル配信)
+        ↕ WebSocket (/ws)
+[web_server_node]
+        ↕ bluetooth_rx / bluetooth_tx (std_msgs/String)
+[routing_node / robot_control]
+```
+
+ラズパイ上で HTTP + WebSocket サーバーを立ち上げ、**ブラウザもラズパイ上（または同一ローカルネットワーク経由）で動作**。
+競技会場では外部ルーター不要。ラズパイを Wi-Fi アクセスポイントとして設定し、オペレーターのスマホ/タブレットが接続して `http://<raspi-ip>:8080` にアクセスする形でも運用可能。
+
+#### 8-1: 新規パッケージ `web_control`
+
+**ディレクトリ構成:**
+```
+src/web_control/
+├── CMakeLists.txt
+├── package.xml
+├── pyproject.toml           ← uv 管理（aiohttp を追加）
+├── src/web_control/
+│   ├── __init__.py
+│   └── web_server_node.py
+├── web/
+│   ├── index.html           ← 自動制御 UI
+│   ├── controller.html      ← 手動コントローラ UI（Bluetooth 版と同等機能を WebSocket で）
+│   ├── style.css
+│   ├── auto.js
+│   └── controller.js
+└── scripts/
+    └── launch_web_server.py
+```
+
+**依存ライブラリ:** `aiohttp`（uv で管理。`uv add aiohttp`）
+
+**パッケージ作成手順（実装時）:**
+```bash
+cd src
+ros2 pkg create web_control
+cd web_control
+uv init . --lib --python-preference only-system
+uv venv --system-site-packages
+uv add aiohttp
+```
+
+#### 8-2: web_server_node.py の動作仕様
+
+**起動時の処理:**
+1. `aiohttp` で HTTP + WebSocket を同一ポート 8080 で起動
+2. `GET /` → `web/index.html` を返す
+3. `GET /controller` → `web/controller.html` を返す
+4. `GET /ws` → WebSocket ハンドラ
+
+**接続管理:**
+- 接続中の全クライアントをセットで管理し、ブロードキャスト
+- 複数ブラウザタブ同時接続対応
+
+**asyncio と rclpy の統合方針:**
+- rclpy は `spin()` を別スレッドで動かす（または MultiThreadedExecutor）
+- `aiohttp` の asyncio イベントループは `threading.Thread` + `asyncio.new_event_loop()` で独立して起動
+- ROS2 コールバック → WebSocket 送信: `asyncio.run_coroutine_threadsafe(broadcast(data), loop)` を使用
+- WebSocket 受信 → ROS2 publish: スレッドセーフな publish（rclpy は publish がスレッドセーフ）
+
+**ROS2 サブスクリプション:**
+- `bluetooth_tx` (String) → WebSocket 全クライアントにブロードキャスト
+
+**ROS2 パブリッシュ:**
+- WebSocket から受信したコマンド → `bluetooth_rx` (String) に転送
+  （`set_court` のみ `bluetooth_rx` には流さず、内部状態として保持し `routing_node` の別トピックで処理）
+
+**定期送信:** 接続時および状態変化時に `{"type": "server_status", "court": "blue"|"red", "nav_mode": "manual"|"auto"}` をブロードキャスト
+
+#### 8-3: WebSocket メッセージプロトコル
+
+**ブラウザ → サーバー（コマンド）:**
+
+| type | フィールド | 説明 |
+|------|-----------|------|
+| `set_court` | `court: "blue"\|"red"` | コート選択（web_server_node が保持、routing_node に転送） |
+| `start_auto` | なし | 自動シーケンス開始（`nav_mode: auto` → `nav_goal: waypoint_1` を順次送信） |
+| `stop_auto` | なし | 自動制御停止（`nav_mode: manual` を送信） |
+| `nav_goal` | `waypoint: string` | 個別ウェイポイント指定（デバッグ・調整用） |
+| `joystick` | `l_x, l_y, r: int (-10〜10)` | 手動走行（robot_control が処理。auto モード中は無視） |
+| `hand_control` | `target, control_type, action` | ハンド操作（robot_control が処理） |
+| `pid_gains` | `kp, ki, kd: float` | PID ゲイン調整（robot_control が処理） |
+
+**サーバー → ブラウザ（ステータス）:**
+
+| 発生元 | 内容 |
+|--------|------|
+| routing_node (bluetooth_tx) | `{"nav_status": "navigating"\|"arrived"\|"cancelled"\|"error", ...}` |
+| robot_control (bluetooth_tx) | `{"m3508_rpms": {...}, "yagura": {...}, "ring": {...}}` |
+| web_server_node (内部) | `{"type": "server_status", "court": "blue"\|"red", "nav_mode": "manual"\|"auto"}` |
+
+**注意:** `bluetooth_tx` を通るメッセージは web_server_node がそのまま WebSocket に流す。フォーマットは変えない。
+
+#### 8-4: Web UI 仕様
+
+**index.html（自動制御ページ）:**
+- ヘッダー: WebSocket 接続状態インジケータ（緑/赤）
+- コート選択セクション: 「青コート」「赤コート」ボタン（選択中は強調表示）
+- 制御セクション: 「自動開始」「停止」ボタン（大きく、誤操作防止のため確認ダイアログあり）
+- ステータスセクション:
+  - モード表示: `MANUAL` / `AUTO_IDLE` / `NAVIGATING`
+  - 現在のウェイポイント名
+  - 進捗: `waypoint_X / 全N個`
+- ログセクション: 最新 20 件のイベントを時系列表示
+- ナビゲーション: `controller.html` へのリンク
+
+**controller.html（手動コントローラページ）:**
+- 左バーチャルスティック: 前後左右移動（l_x, l_y を -10〜10 で送信、`joystick` type）
+- 右バーチャルスティック or スライダー: 回転（r を -10〜10 で送信）
+- ハンドコントロールボタン:
+  - yagura_1 / yagura_2: pos（up/down）, state（open/close）
+  - ring_1 / ring_2: pos（pickup/yagura/honmaru）, state（open/close）
+- RPM フィードバック表示（4輪）
+- ナビゲーション: `index.html` へのリンク
+
+**実装技術:** 純粋な HTML + CSS + Vanilla JS（フレームワーク不使用。RPi 上でビルド不要）
+
+**スティック実装:** `touchstart` / `touchmove` / `touchend` で仮想スティックを実装。PC マウスでもテスト可能にする。
+
+**送信レート:** スティック入力は 50ms ごとにまとめて送信（onTouch 毎に送ると過多）
+
+---
+
+### フェーズ 9: 競技対応機能（未着手）
+
+#### 9-1: コート切り替え（青/赤 Y 軸対称）
+
+**前提:** 青コートと赤コートはフィールド中央の縦線（Y 軸）を挟んで線対称。ウェイポイントは青コートを基準に定義し、赤コートは Y 座標を自動反転する。
+
+**重要:** マッピング時はロボットをフィールドの X 軸（前進方向）に合わせて配置すること。マッピング開始点の正面方向が Y 軸対称の基準になる。
+
+**座標変換式:**
+```
+赤コート:
+  x_red   =  x_blue          (X 座標はそのまま)
+  y_red   = -y_blue          (Y 座標を反転)
+  theta_red = -theta_blue    (向きも反転：右向き ↔ 左向き)
+```
+
+**実装場所:** `routing_node.py` に `_current_court: str = "blue"` を追加。
+`_handle_goal()` 内でゴール送信前に座標変換を適用。
+`set_court` コマンドは `bluetooth_rx` に `{"type": "set_court", "court": "blue"|"red"}` として流れ、routing_node が受け取る（`on_controller_command` には影響しない、routing_node だけが処理）。
+
+**`on_arrive` シーケンスへの適用:** シーケンス中のハンド操作は対称性に依存しないため変換不要。ただし将来的に「向き補正のための小移動」を追加する場合は座標変換が必要。
+
+#### 9-2: ウェイポイント到着時のハンドシーケンス
+
+**`waypoints.yaml` 拡張フォーマット:**
+
+```yaml
+waypoints:
+  waypoint_1:
+    x: -0.677
+    y: 1.275
+    theta: 0.0
+    on_arrive:
+      - action: hand_control
+        target: yagura_1
+        control_type: pos
+        action_value: up
+      - action: wait
+        duration: 1.5        # 秒
+      - action: hand_control
+        target: ring_1
+        control_type: state
+        action_value: open
+      - action: wait
+        duration: 0.5
+      - action: hand_control
+        target: ring_1
+        control_type: state
+        action_value: close
+  waypoint_2:
+    x: -1.859
+    y: 2.419
+    theta: 0.0
+    on_arrive: []            # 到着後は何もしない
+```
+
+**`on_arrive` で使える action 種別:**
+
+| action | 必須フィールド | 説明 |
+|--------|-------------|------|
+| `hand_control` | `target, control_type, action_value` | `bluetooth_rx` に `{"type": "hand_control", ...}` を発行 |
+| `wait` | `duration` (秒) | 指定秒数待機（rclpy Timer or time.sleep をスレッドで） |
+
+**`target` の値:** `yagura_1`, `yagura_2`, `ring_1`, `ring_2`
+**`control_type` の値:** `pos`, `state`
+**`action_value` の値（yagura pos）:** `up`, `down`, `stopped`
+**`action_value` の値（yagura state）:** `open`, `close`, `stopped`
+**`action_value` の値（ring pos）:** `pickup`, `yagura`, `honmaru`, `stopped`
+**`action_value` の値（ring state）:** `open`, `close`, `stopped`
+
+**実行フロー（routing_node.py の変更点）:**
+```
+Nav2 SUCCEEDED 受信 (_result_cb)
+  → on_arrive リストを別スレッド（または Timer チェーン）で順次実行
+      - hand_control: bluetooth_rx に JSON を publish
+      - wait: time.sleep（別スレッドなら OK）
+  → 全ステップ完了後に bluetooth_tx に "arrived" を発行
+  → _state = "AUTO_IDLE"（または次の waypoint へ）
+```
+
+**中断処理:** シーケンス実行中に `nav_mode: manual` を受信したら即座に中断（フラグで制御）。`"cancelled"` を発行。
+
+**実装の注意:** `time.sleep` を rclpy のメインスレッドで呼ぶと他のコールバックがブロックされる。専用スレッドで実行するか、rclpy の `Timer` を使ったコールバックチェーンで実装すること。
+
+#### 9-3: 自動シーケンス全体フロー
+
+**`auto_sequence` を `waypoints.yaml` に追加:**
+
+```yaml
+auto_sequence:
+  - waypoint_1
+  - waypoint_2
+  - waypoint_3
+
+waypoints:
+  waypoint_1: ...
+  waypoint_2: ...
+  waypoint_3: ...
+```
+
+**`start_auto` コマンドの動作:**
+1. Web UI の「自動開始」→ `{"type": "start_auto"}` → web_server_node → `bluetooth_rx`
+2. routing_node が受信 → `_state` を `NAVIGATING` に設定
+3. `auto_sequence` の先頭から順に:
+   a. `_send_goal(x, y, theta)` を呼び出し
+   b. `bluetooth_tx` に `{"nav_status": "navigating", "waypoint": "waypoint_X", "progress": "1/3"}` を発行
+   c. Nav2 SUCCEEDED → `on_arrive` 実行 → 完了待ち
+   d. `bluetooth_tx` に `{"nav_status": "arrived", "waypoint": "waypoint_X", "progress": "1/3"}` を発行
+   e. 次の waypoint へ
+4. 全 waypoint 完了 → `bluetooth_tx` に `{"nav_status": "completed"}` を発行 → `_state = "AUTO_IDLE"`
+
+**`stop_auto` / `nav_mode: manual` の挙動:** 実行中のゴールをキャンセル + シーケンスを中断
+
+---
+
+### フェーズ 10: 壁基準ウェイポイント生成（未着手）
+
+**課題:** テストランでは RViz2 を確認してウェイポイント座標を記入する時間が取れない。
+
+**解決策:** ウェイポイントを「南壁から 50cm、西壁から 100cm」のような相対座標で事前定義し、マッピング後にスクリプトで自動変換する。±5% の寸法誤差も PGM に自動反映されるため、変換後の座標は実フィールドに対応する。
+
+#### 10-1: waypoints_relative.yaml（新規）
+
+**ファイルパス:** `src/auto_nav/config/waypoints_relative.yaml`
+
+```yaml
+# 競技前に事前定義するウェイポイント（壁からの相対距離）
+# 方角の定義:
+#   north: マッピング開始時にロボットが向いていた方向の壁
+#   south: その反対の壁
+#   east:  ロボットの右側の壁（マッピング開始時）
+#   west:  ロボットの左側の壁（マッピング開始時）
+# distance: その壁からの距離 [m]（壁面から内側へ）
+# cross_wall / cross_distance: 垂直方向の基準壁と距離
+
+auto_sequence:
+  - waypoint_1
+  - waypoint_2
+
+waypoints:
+  waypoint_1:
+    from_wall: south
+    distance: 0.5
+    cross_wall: west
+    cross_distance: 1.0
+    theta: 1.57       # 北を向く
+    on_arrive:
+      - action: hand_control
+        target: ring_1
+        control_type: state
+        action_value: open
+  waypoint_2:
+    from_wall: north
+    distance: 0.3
+    cross_wall: west
+    cross_distance: 2.0
+    theta: 0.0
+    on_arrive: []
+```
+
+#### 10-2: generate_waypoints.py（新規スクリプト）
+
+**ファイルパス:** `src/auto_nav/scripts/generate_waypoints.py`
+
+**使い方:**
+```bash
+python3 src/auto_nav/scripts/generate_waypoints.py \
+  --map /home/taiga/maps/field.pgm \
+  --meta /home/taiga/maps/field.yaml \
+  --relative src/auto_nav/config/waypoints_relative.yaml \
+  --output src/auto_nav/config/waypoints.yaml
+```
+
+**依存ライブラリ:** `Pillow`（PIL）のみ（OpenCV 不使用で軽量に）
+
+**処理フロー:**
+1. `field.pgm` を PIL で読み込む
+2. `field.yaml` から `resolution`（m/cell）と `origin`（マップ原点のワールド座標）を取得
+3. 占有グリッド（0=空き, 100=占有, -1=未探索）から壁領域を検出:
+   - 占有値 ≥ 65 をピクセルで壁と判定（slam_toolbox のデフォルト設定に合わせた閾値）
+   - 各方向の壁の外縁座標を検出（各行/列の中央値フィルタでノイズ除去）
+   - 結果: `wall_north_y`, `wall_south_y`, `wall_east_x`, `wall_west_x`（ワールド座標 [m]）
+4. 相対定義を絶対座標に変換:
+   ```
+   from_wall=south, distance=0.5 → y_abs = wall_south_y + 0.5
+   from_wall=north, distance=0.3 → y_abs = wall_north_y - 0.3
+   cross_wall=west,  cross_distance=1.0 → x_abs = wall_west_x + 1.0
+   cross_wall=east,  cross_distance=2.0 → x_abs = wall_east_x - 2.0
+   ```
+5. 変換結果（絶対座標 x, y, theta + on_arrive）を `waypoints.yaml` に書き出し
+6. 生成された `waypoints.yaml` は既存フォーマットと互換（routing_node がそのまま読める）
+
+**事前準備（マッピングフローへの追記）:** `serialize_map` の後に以下も実行する:
+```bash
+# PGM マップファイルも保存する（generate_waypoints.py が必要とする）
+ros2 run nav2_map_server map_saver_cli \
+  -f /home/taiga/maps/field \
+  --ros-args -p use_sim_time:=false
+# → /home/taiga/maps/field.pgm + /home/taiga/maps/field.yaml が生成される
+```
+
+**壁検出の精度注意点:**
+- ロボットがフィールドを一周して壁を全周スキャンしていることが前提（壁が途切れていると誤検出）
+- 壁の厚さ（20cm 程度）の中心線ではなく外縁を基準にするため、`distance` の定義は「壁面（内側面）からの距離」とする
+- 検出結果をスクリプト実行時に標準出力に表示し、目視で確認できるようにする
+
+---
+
+### 競技運用フロー（更新版）
+
+**フェーズ 8〜10 完成後の全体フロー:**
+
+```
+① マッピング（試合前）
+   mapping_launch.py 起動 → Bluetooth/手動で一周走行
+   serialize_map → map_saver_cli（PGM も保存）
+
+② ウェイポイント生成（マッピング直後、5秒程度）
+   python3 generate_waypoints.py --map field.pgm --meta field.yaml \
+     --relative waypoints_relative.yaml --output waypoints.yaml
+   ※ waypoints_relative.yaml は事前に「壁から〇cm」形式で定義済み
+
+③ 本番起動
+   auto_nav_launch.py 起動（web_server_node も起動される）
+   ブラウザで localhost:8080 にアクセス（またはオペレーターのデバイスから）
+
+④ コート選択
+   Web UI でコート（青/赤）を選択
+
+⑤ 自動制御開始
+   Web UI の「自動開始」ボタン → routing_node が auto_sequence を実行
+
+⑥ フォールバック（自動制御不能時のみ）
+   iPad を Bluetooth 接続 → 手動操縦モードに切り替え
+```
+
+---
+
 ## TF ツリー構成
 
 ```
@@ -403,9 +771,13 @@ map
 2. **手動/自動モード競合**: manual 時は robot_control が、auto 時は cmd_vel_bridge が wheel_control をパブリッシュする。両方が同時にパブリッシュしないようモード切り替えロジック実装済み。
 3. **LiDAR 取付位置の TF**: `laser_frame` のズレはコストマップ精度に直結する。取付位置・向きを実機で計測して確認すること（現在は z=0.15m を仮設定中）。
 4. **YDLiDAR のデッドゾーン**: 0.1m 以内はデッドゾーン。フットプリントにマージンを持たせること。
-5. **ウェイポイントの試合ごと調整**: 毎試合マッピング後に RViz2 でウェイポイント座標を確認・調整する。RViz2 での座標読み取り操作を事前に練習しておくこと。
+5. **ウェイポイントの試合ごと調整（フェーズ 10 完成後は自動化）**: フェーズ 10 完成前は毎試合 RViz2 でウェイポイント座標を確認・調整する必要がある。フェーズ 10 完成後は `generate_waypoints.py` で自動生成。
 6. **Nav2 のメカナムホイール対応**: DWB で Y 方向速度を有効化済み（nav2_params.yaml の max_vel_y, vy_samples 参照）。
 7. **LiDAR タイヤ映り込み**: `LaserScanRangeFilter` で 0.33m 未満を除去して対処済み（`/scan_filtered`）。
+8. **コート対称軸の前提**: 赤コートの Y 軸反転はマッピング開始時のロボット向きを X 軸としている。マッピング時は必ずフィールド中央線に正対して配置すること。
+9. **asyncio + rclpy の統合**: web_server_node は aiohttp の asyncio ループと rclpy のループを別スレッドで動かす。`asyncio.run_coroutine_threadsafe` / スレッドセーフ publish 以外での跨ぎ操作は禁止。
+10. **on_arrive 実行中のブロッキング**: `time.sleep` を rclpy メインスレッドで呼ぶとコールバックが止まる。on_arrive シーケンスは専用スレッドで実行すること。
+11. **壁検出の前提**: `generate_waypoints.py` はロボットがフィールド全周を走行して壁が途切れていないことを前提とする。マッピング精度が低い場合は壁検出が失敗する可能性がある。
 
 ---
 
@@ -666,6 +1038,22 @@ Bluetooth コマンドを受け取り Nav2 NavigateToPose ActionServer にゴー
 | nav_mode: manual 送信（走行中） | ✅ ゴールキャンセル、手動操縦に復帰 |
 
 **残課題:** DWB コントローラのふらつき対策（nav2_params.yaml のチューニング）が必要
+
+---
+
+---
+
+### 2026-02-27（後半）
+
+**フェーズ 8〜10 の要件・実装方針を策定**
+
+競技規則（試合中は外部通信禁止）を受けて、以下のフェーズを計画として追加:
+
+- **フェーズ 8**: Web コントロールシステム（`web_control` パッケージ、WebSocket + HTTP、auto.js / controller.html）
+- **フェーズ 9**: 競技対応機能（コート切り替え Y 軸反転、waypoint `on_arrive` ハンドシーケンス、`start_auto` 全自動シーケンス）
+- **フェーズ 10**: 壁基準ウェイポイント生成（`waypoints_relative.yaml` + `generate_waypoints.py`）
+
+詳細はフェーズ別実装計画セクションに記載済み。実機到着後に順次実装予定。
 
 ---
 
