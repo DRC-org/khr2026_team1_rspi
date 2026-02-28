@@ -388,21 +388,27 @@ ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
 
 ### フェーズ 8: Web コントロールシステム（未着手）
 
-**背景:** 競技規則により試合中は一切の外部通信が禁止。Bluetooth コントローラは自動制御失敗時の手動フォールバック専用とし、通常運用は以下の構成に移行する。
+**背景:** 競技規則により試合中は一切の外部通信が禁止。Bluetooth コントローラは自動制御失敗時の手動フォールバック専用とし、通常運用は WebSocket 経由に移行する。
+
+**基本方針:** UI は既存の `khr2026_team1_bt_controller`（React + TypeScript + Vite）リポジトリに **WebSocket 接続ページを追加**する。新規に HTML を書き起こすのではなく、既存の UI コンポーネント・スタイル・プロトコルを流用する。
 
 ```
-[ブラウザ (localhost:8080)]
-        ↕ HTTP (静的ファイル配信)
-        ↕ WebSocket (/ws)
-[web_server_node]
+[khr2026_team1_bt_controller (ビルド済み SPA)]
+        ↕ WebSocket (ws://<raspi-ip>:8080/ws)
+[web_server_node（本リポジトリ: web_control パッケージ）]
         ↕ bluetooth_rx / bluetooth_tx (std_msgs/String)
 [routing_node / robot_control]
 ```
 
-ラズパイ上で HTTP + WebSocket サーバーを立ち上げ、**ブラウザもラズパイ上（または同一ローカルネットワーク経由）で動作**。
-競技会場では外部ルーター不要。ラズパイを Wi-Fi アクセスポイントとして設定し、オペレーターのスマホ/タブレットが接続して `http://<raspi-ip>:8080` にアクセスする形でも運用可能。
+オペレーターのスマホ/タブレットはラズパイの Wi-Fi AP に接続し、
+`http://<raspi-ip>:5173`（開発サーバー）または GitHub Pages の URL を開く。
+ラズパイ側は WebSocket サーバーのみ起動すればよい（HTML ファイルの配信は不要）。
 
-#### 8-1: 新規パッケージ `web_control`
+---
+
+#### 8-1: RPi 側 `web_control` パッケージ（新規）
+
+**責務:** WebSocket ブリッジのみ。HTTP 静的ファイル配信は行わない。
 
 **ディレクトリ構成:**
 ```
@@ -413,17 +419,11 @@ src/web_control/
 ├── src/web_control/
 │   ├── __init__.py
 │   └── web_server_node.py
-├── web/
-│   ├── index.html           ← 自動制御 UI
-│   ├── controller.html      ← 手動コントローラ UI（Bluetooth 版と同等機能を WebSocket で）
-│   ├── style.css
-│   ├── auto.js
-│   └── controller.js
 └── scripts/
     └── launch_web_server.py
 ```
 
-**依存ライブラリ:** `aiohttp`（uv で管理。`uv add aiohttp`）
+**依存ライブラリ:** `aiohttp`（uv で管理）
 
 **パッケージ作成手順（実装時）:**
 ```bash
@@ -435,84 +435,139 @@ uv venv --system-site-packages
 uv add aiohttp
 ```
 
-#### 8-2: web_server_node.py の動作仕様
+**web_server_node.py の動作仕様:**
 
-**起動時の処理:**
-1. `aiohttp` で HTTP + WebSocket を同一ポート 8080 で起動
-2. `GET /` → `web/index.html` を返す
-3. `GET /controller` → `web/controller.html` を返す
-4. `GET /ws` → WebSocket ハンドラ
+1. `aiohttp` で WebSocket サーバーをポート 8080 で起動（`ws://0.0.0.0:8080/ws`）
+2. `GET /ws` → WebSocket ハンドラ（CORS ヘッダー付き。GitHub Pages からの接続を許可）
+3. 接続中の全クライアントをセットで管理し、ブロードキャスト
 
-**接続管理:**
-- 接続中の全クライアントをセットで管理し、ブロードキャスト
-- 複数ブラウザタブ同時接続対応
+**asyncio + rclpy 統合方針:**
+- rclpy `MultiThreadedExecutor` でスピン（メインスレッド）
+- `aiohttp` の asyncio ループは `threading.Thread` + `asyncio.new_event_loop()` で別スレッドで起動
+- ROS2 コールバック → WebSocket: `asyncio.run_coroutine_threadsafe(broadcast(msg), loop)`
+- WebSocket → ROS2: `publisher.publish()`（rclpy の publish はスレッドセーフ）
 
-**asyncio と rclpy の統合方針:**
-- rclpy は `spin()` を別スレッドで動かす（または MultiThreadedExecutor）
-- `aiohttp` の asyncio イベントループは `threading.Thread` + `asyncio.new_event_loop()` で独立して起動
-- ROS2 コールバック → WebSocket 送信: `asyncio.run_coroutine_threadsafe(broadcast(data), loop)` を使用
-- WebSocket 受信 → ROS2 publish: スレッドセーフな publish（rclpy は publish がスレッドセーフ）
+**ROS2 インターフェース:**
+- Sub: `bluetooth_tx` (String) → WebSocket 全クライアントにブロードキャスト
+- Pub: `bluetooth_rx` (String) ← WebSocket から受信したコマンドを転送
 
-**ROS2 サブスクリプション:**
-- `bluetooth_tx` (String) → WebSocket 全クライアントにブロードキャスト
+**CORS 設定:** ブラウザが GitHub Pages 等の外部ドメインから WebSocket に接続するため、
+`Access-Control-Allow-Origin: *` ヘッダーを HTTP Upgrade レスポンスに付与する。
 
-**ROS2 パブリッシュ:**
-- WebSocket から受信したコマンド → `bluetooth_rx` (String) に転送
-  （`set_court` のみ `bluetooth_rx` には流さず、内部状態として保持し `routing_node` の別トピックで処理）
+---
 
-**定期送信:** 接続時および状態変化時に `{"type": "server_status", "court": "blue"|"red", "nav_mode": "manual"|"auto"}` をブロードキャスト
+#### 8-2: `khr2026_team1_bt_controller` リポジトリへの追加
+
+既存スタック（React 19 + TypeScript + Vite + Tailwind CSS 4 + React Router 7）をそのまま使用。
+
+**既存プロトコルとの整合:**
+
+現在の Bluetooth 送信 JSON（`bluetooth.tsx` の `sendJsonData()`）と WebSocket 送信 JSON は**完全に同一フォーマット**。
+既存の `OpButton.tsx` / `useJoystickFields.tsx` 等のコンポーネントは接続手段を意識せずに再利用できる。
+
+---
+
+##### 追加ファイル
+
+**`src/hooks/useWebSocketConnect.tsx`（新規）**
+
+`useBluetoothConnect.tsx` と同等のインターフェースを提供する WebSocket 接続管理フック。
+
+```typescript
+// インターフェース（useBluetoothConnect と揃える）
+interface UseWebSocketConnectReturn {
+  isConnected: boolean
+  connect: (url: string) => Promise<void>   // 例: "ws://192.168.4.1:8080/ws"
+  disconnect: () => void
+  sendJson: (data: unknown) => void         // JSON シリアライズして send
+  lastMessage: unknown | null              // 最後に受信した JSON（パース済み）
+}
+```
+
+**送信レート:** joystick は `useJoystickFields.tsx` の既存 `SEND_INTERVAL = 100ms` をそのまま流用。
+`sendJson` 呼び出し元は Bluetooth 版と同じコンポーネントを再利用できる。
+
+---
+
+##### 変更ファイル
+
+**`src/routes/Index.tsx`（変更）**
+
+既存のメニューに「Auto Nav（WebSocket）」を追加:
+
+| メニュー | 説明 |
+|---------|------|
+| Controller（既存） | ロボットを Bluetooth で手動コントロールする |
+| PID Tuning（既存） | 足回りの PID ゲインを調整する |
+| **Auto Nav（新規）** | **自律走行の制御・モニタリング（WebSocket 接続）** |
+| **Controller (WS)（新規）** | **WebSocket 経由で手動コントロール（競技本番用）** |
+
+**`src/routes/Controller.tsx`（変更）**
+
+Bluetooth 接続の既存実装に加え、WebSocket 接続オプションを追加。
+Index ページからの遷移パラメータ（`?mode=ws&url=ws://...`）で接続手段を切り替える。
+
+---
+
+##### 新規ルート: `src/routes/AutoNav/`
+
+```
+src/routes/AutoNav/
+├── index.tsx           ← AutoNav ページ本体
+├── useAutoNav.ts       ← WebSocket 接続 + 状態管理フック
+└── CourtSelector.tsx   ← コート選択コンポーネント
+```
+
+**`AutoNav/index.tsx` の UI 仕様:**
+
+- **接続セクション:**
+  - WebSocket URL 入力欄（デフォルト: `ws://192.168.4.1:8080/ws`）
+  - 「接続」「切断」ボタン・接続状態インジケータ
+
+- **コート選択セクション:**
+  - 「青コート」「赤コート」ボタン（選択中は強調表示）
+  - 選択時に `{"type": "set_court", "court": "blue"|"red"}` を送信
+
+- **制御セクション:**
+  - 「自動開始」ボタン（`{"type": "start_auto"}` を送信）
+  - 「停止」ボタン（`{"type": "stop_auto"}` を送信）
+  - 誤タップ防止のため操作確認ダイアログを挟む
+
+- **ステータスセクション:**
+  - モード: `MANUAL` / `AUTO_IDLE` / `NAVIGATING`
+  - 現在ウェイポイント名 + 進捗 `1 / 3`
+  - フィールド SVG（`khr2026_field.svg` の既存アセット再利用）でロボット位置表示
+
+- **ログセクション:**
+  - `bluetooth_tx` から受信した `nav_status` メッセージを時系列表示（最新 20 件）
+
+---
 
 #### 8-3: WebSocket メッセージプロトコル
 
-**ブラウザ → サーバー（コマンド）:**
+**ブラウザ → サーバー（送信）:**
+
+Bluetooth 版と完全に同一フォーマット。既存の JSON 仕様をそのまま流用。
 
 | type | フィールド | 説明 |
 |------|-----------|------|
-| `set_court` | `court: "blue"\|"red"` | コート選択（web_server_node が保持、routing_node に転送） |
-| `start_auto` | なし | 自動シーケンス開始（`nav_mode: auto` → `nav_goal: waypoint_1` を順次送信） |
-| `stop_auto` | なし | 自動制御停止（`nav_mode: manual` を送信） |
-| `nav_goal` | `waypoint: string` | 個別ウェイポイント指定（デバッグ・調整用） |
-| `joystick` | `l_x, l_y, r: int (-10〜10)` | 手動走行（robot_control が処理。auto モード中は無視） |
-| `hand_control` | `target, control_type, action` | ハンド操作（robot_control が処理） |
-| `pid_gains` | `kp, ki, kd: float` | PID ゲイン調整（robot_control が処理） |
+| `set_court` | `court: "blue"\|"red"` | コート選択（routing_node が受け取り座標変換に使用） |
+| `start_auto` | なし | 自動シーケンス開始 |
+| `stop_auto` | なし | 自動制御停止 |
+| `nav_goal` | `waypoint: string` | 個別ウェイポイント指定（デバッグ用） |
+| `joystick` | `l_x, l_y, r: int (-10〜10)` | 手動走行（Bluetooth 版と同一） |
+| `hand_control` | `target, control_type, action` | ハンド操作（Bluetooth 版と同一） |
+| `pid_gains` | `kp, ki, kd: float` | PID ゲイン調整（Bluetooth 版と同一） |
 
-**サーバー → ブラウザ（ステータス）:**
+**サーバー → ブラウザ（受信）:**
+
+`bluetooth_tx` に流れるメッセージをそのまま転送。PID チューニング画面でも WebSocket 接続を使えば Bluetooth と同様に動作する。
 
 | 発生元 | 内容 |
 |--------|------|
-| routing_node (bluetooth_tx) | `{"nav_status": "navigating"\|"arrived"\|"cancelled"\|"error", ...}` |
-| robot_control (bluetooth_tx) | `{"m3508_rpms": {...}, "yagura": {...}, "ring": {...}}` |
-| web_server_node (内部) | `{"type": "server_status", "court": "blue"\|"red", "nav_mode": "manual"\|"auto"}` |
-
-**注意:** `bluetooth_tx` を通るメッセージは web_server_node がそのまま WebSocket に流す。フォーマットは変えない。
-
-#### 8-4: Web UI 仕様
-
-**index.html（自動制御ページ）:**
-- ヘッダー: WebSocket 接続状態インジケータ（緑/赤）
-- コート選択セクション: 「青コート」「赤コート」ボタン（選択中は強調表示）
-- 制御セクション: 「自動開始」「停止」ボタン（大きく、誤操作防止のため確認ダイアログあり）
-- ステータスセクション:
-  - モード表示: `MANUAL` / `AUTO_IDLE` / `NAVIGATING`
-  - 現在のウェイポイント名
-  - 進捗: `waypoint_X / 全N個`
-- ログセクション: 最新 20 件のイベントを時系列表示
-- ナビゲーション: `controller.html` へのリンク
-
-**controller.html（手動コントローラページ）:**
-- 左バーチャルスティック: 前後左右移動（l_x, l_y を -10〜10 で送信、`joystick` type）
-- 右バーチャルスティック or スライダー: 回転（r を -10〜10 で送信）
-- ハンドコントロールボタン:
-  - yagura_1 / yagura_2: pos（up/down）, state（open/close）
-  - ring_1 / ring_2: pos（pickup/yagura/honmaru）, state（open/close）
-- RPM フィードバック表示（4輪）
-- ナビゲーション: `index.html` へのリンク
-
-**実装技術:** 純粋な HTML + CSS + Vanilla JS（フレームワーク不使用。RPi 上でビルド不要）
-
-**スティック実装:** `touchstart` / `touchmove` / `touchend` で仮想スティックを実装。PC マウスでもテスト可能にする。
-
-**送信レート:** スティック入力は 50ms ごとにまとめて送信（onTouch 毎に送ると過多）
+| routing_node | `{"nav_status": "navigating"\|"arrived"\|"cancelled"\|"error", ...}` |
+| robot_control | `{"m3508_rpms": {...}, "yagura": {...}, "ring": {...}, ...}` |
+| web_server_node | `{"type": "server_status", "court": "blue"\|"red"}` |
 
 ---
 
@@ -1049,7 +1104,7 @@ Bluetooth コマンドを受け取り Nav2 NavigateToPose ActionServer にゴー
 
 競技規則（試合中は外部通信禁止）を受けて、以下のフェーズを計画として追加:
 
-- **フェーズ 8**: Web コントロールシステム（`web_control` パッケージ、WebSocket + HTTP、auto.js / controller.html）
+- **フェーズ 8**: Web コントロールシステム（`web_control` パッケージは WebSocket ブリッジのみ。UI は `khr2026_team1_bt_controller` に WebSocket 対応ページを追加）
 - **フェーズ 9**: 競技対応機能（コート切り替え Y 軸反転、waypoint `on_arrive` ハンドシーケンス、`start_auto` 全自動シーケンス）
 - **フェーズ 10**: 壁基準ウェイポイント生成（`waypoints_relative.yaml` + `generate_waypoints.py`）
 
