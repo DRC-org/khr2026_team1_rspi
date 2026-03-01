@@ -80,6 +80,20 @@ class M3508Controller:
 
         return rpms
 
+    def apply_omega_correction(self, base_rpms: list[float], omega: float) -> list[float]:
+        """
+        スケーリング済み RPM にヨー補正を直接加算する。
+
+        calc_motor_rpms に omega_correction を混ぜると比例スケーリングで補正が消えるため、
+        スケーリング後に個別クランプで加算する方式を取る。
+
+        逆運動学より、純回転時は全 4 輪に -G*omega が均等に加わる。
+        """
+        geometry_factor = L_X + L_Y
+        rpm_calc_const = (60 * GEAR_RATIO) / (2 * math.pi * WHEEL_RADIUS)
+        delta = -geometry_factor * omega * rpm_calc_const
+        return [max(-M3508_MAX_RPM, min(M3508_MAX_RPM, r + delta)) for r in base_rpms]
+
     def set_target_pid_gains(self, kp: float, ki: float, kd: float) -> None:
         """
         PIDゲインを設定する

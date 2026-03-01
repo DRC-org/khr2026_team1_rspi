@@ -1,0 +1,25 @@
+# LiDAR スキャンフィルタ設定
+#
+# 目的: ロボット自身のタイヤがスキャン平面に映り込み、
+#       コストマップで自分自身を障害物と認識する問題を防ぐ。
+#
+# 方法: LaserScanRangeFilter で 0.33m 未満の点をすべて除去する。
+#       タイヤ中心までの距離 ≈ 0.30m のため、マージン 0.03m を加えて 0.33m に設定。
+#
+# 注意:
+#   - 0.33m より近い壁も検出できなくなる（Nav2 の最接近距離として留意）
+#   - TF 不要のためシンプルかつ確実に動作する
+#
+# ※ LaserScanFootprintFilter を試したが TF 変換でサイレントに失敗し
+#    フィルタリングされないことを実機で確認済み（2026-02-22）
+
+scan_to_scan_filter_chain:
+  ros__parameters:
+    filter1:
+      name: range_filter
+      type: laser_filters/LaserScanRangeFilter
+      params:
+        use_message_range_limits: false
+        lower_threshold: 0.33
+        upper_threshold: 12.0
+        lower_replacement_value: 0.0

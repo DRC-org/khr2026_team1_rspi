@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PIDTerms.msg"
   "msg/FeedbackPIDTerms.msg"
   "msg/YaguraMechanism.msg"
+  "msg/IMUValues.msg"
   "msg/RingMechanism.msg"
   "msg/WheelMessage.msg"
   "msg/HandMessage.msg"

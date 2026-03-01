@@ -1,0 +1,67 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 20.0
+    sensor_timeout: 0.1
+    two_d_mode: true  # z/roll/pitch を無視
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+    publish_tf: true  # EKF が TF(odom→base_link) を配信
+
+    # エンコーダオドメトリ: 並進速度のみ使用（vyaw はホイールスリップで不正確なため無効）
+    odom0: /odom_raw
+    odom0_config: [false, false, false,   # x, y, z（pose は EKF が積分するため不使用）
+                   false, false, false,   # roll, pitch, yaw
+                   true,  true,  false,   # vx, vy, vz
+                   false, false, false,   # vroll, vpitch, vyaw（omega）← 無効化
+                   false, false, false]   # ax, ay, az
+    odom0_queue_size: 5
+    odom0_differential: false
+
+    # IMU: gz（angular_velocity.z）のみ使用
+    # ax/ay は単位未確認（mg か m/s^2 か）のため第一フェーズでは無効
+    imu0: /imu
+    imu0_config: [false, false, false,   # orientation（磁気干渉で不正確なため不使用）
+                  false, false, false,   # roll, pitch, yaw
+                  false, false, false,   # linear_velocity
+                  false, false, true,    # vroll, vpitch, vyaw（gz のみ使用）
+                  false, false, false]   # linear_acceleration（第一フェーズは無効）
+    imu0_queue_size: 5
+    imu0_differential: false
+    imu0_remove_gravitational_acceleration: false
+
+    # LiDAR scan-to-scan オドメトリ: 静止時でも ±0.4 度のノイズがあり共分散が極小（2.3e-5）
+    # のため EKF が信頼しすぎて /odom yaw に ±0.75 度の揺れを生じさせていた。
+    # キャリブレーション済み IMU のみでヨー角推定する構成に切り替え。
+    odom1: /scan_odom
+    odom1_config: [false, false, false,   # x, y, z
+                   false, false, false,   # roll, pitch, yaw ← 無効化
+                   false, false, false,   # vx, vy, vz
+                   false, false, false,   # vroll, vpitch, vyaw
+                   false, false, false]   # ax, ay, az
+    odom1_queue_size: 5
+    odom1_differential: true
+
+    # プロセスノイズ（15x15 対角行列、row-major 225要素）
+    # 主要値: x=0.05, y=0.05, yaw=0.08, vx=0.025, vy=0.025, vyaw=0.02
+    process_noise_covariance: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.025, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.025, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0,
+                               0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.015]
+
+    initial_estimate_covariance: [1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9,
+                                  1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9,
+                                  1e-9, 1e-9, 1e-9]
