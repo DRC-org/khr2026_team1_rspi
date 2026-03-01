@@ -230,7 +230,7 @@ def generate_launch_description():
                     " && ros2 service call /slam_toolbox/change_state"
                     " lifecycle_msgs/srv/ChangeState '{transition: {id: 3}}'",
                 ],
-                output="screen",
+                output="log",  # Ctrl+C 時の KeyboardInterrupt トレースバックを端末に出さない
             )
         ],
     )

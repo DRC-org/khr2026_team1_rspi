@@ -55,7 +55,7 @@ class BluetoothROS2Node(Node):
                     self.ble_server.start(self.hci_transport)
                 )
             except KeyboardInterrupt:
-                self.get_logger().info("Bluetooth server interrupted")
+                pass
             except Exception as e:
                 self.get_logger().error(f"Bluetooth server error: {e}")
             finally:
