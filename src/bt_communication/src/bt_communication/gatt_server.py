@@ -29,7 +29,7 @@ class BluetoothGATTServer:
         """Store latest TX data. Called on event loop via call_soon_threadsafe."""
         self._pending_tx_data = data
 
-    async def start(self, hci_transport_uri: str = "usb:0"):
+    async def start(self, hci_transport_uri: str = "usb:2357:0604/E848B8C82000"):
         """Start the Bluetooth GATT server"""
         self.logger.info("Starting BLE GATT Server...")
         self.logger.info(f"Connecting to HCI transport: {hci_transport_uri}")
