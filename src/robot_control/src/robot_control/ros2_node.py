@@ -1,6 +1,8 @@
 import json
 import math
+import time
 
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from robot_msgs.msg import (
     HandMessage,
@@ -13,6 +15,7 @@ from std_msgs.msg import String
 
 from .constants import MAX_SPEED_MPS
 from .hands import HandsController
+from .heading_pid import HeadingPID
 from .m3508 import M3508Controller
 from .vec2 import Vec2
 
@@ -72,6 +75,9 @@ class RobotController(Node):
         self.sub_nav_mode = self.create_subscription(
             String, "/nav_mode", self.on_nav_mode, 10
         )
+        self.sub_odom = self.create_subscription(
+            Odometry, '/odom', self.on_odom, 10
+        )
 
         self._nav_mode = "manual"
         self.m3508_cntl = M3508Controller()
@@ -81,6 +87,11 @@ class RobotController(Node):
         self.wheel_fb_buffer: WheelMessage | None = None
         self.hand_fb_buffer: HandMessage | None = None
         self._hand_fb_warned = False  # ハンド未接続の WARN は初回のみ出す
+
+        self._current_yaw: float | None = None
+        self._heading_pid = HeadingPID(kp=1.0, ki=0.0, kd=0.05)
+        self._target_yaw: float | None = None
+        self._last_cmd_time = time.monotonic()
 
         # ESP32 にコマンドを 50 ms ごとに送信する
         self.create_timer(0.05, self.send_control_command)
@@ -95,6 +106,14 @@ class RobotController(Node):
         # auto モードに切り替わったらジョイスティック入力をリセット
         if prev == "manual" and self._nav_mode == "auto":
             self.m3508_cntl.set_target_velocity(Vec2(0.0, 0.0), 0.0)
+            self._target_yaw = None
+            self._heading_pid.reset()
+
+    def on_odom(self, msg: Odometry) -> None:
+        q = msg.pose.pose.orientation
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self._current_yaw = math.degrees(math.atan2(siny_cosp, cosy_cosp))
 
     def on_wheel_feedback(self, msg: WheelMessage) -> None:
         self.wheel_fb_buffer = msg
@@ -182,12 +201,19 @@ class RobotController(Node):
                 "rl": wheel_fb.m3508_rpms.rl,
                 "rr": wheel_fb.m3508_rpms.rr,
             },
-            "m3508_gains": {
+        }
+
+        if wheel_fb.m3508_gains:
+            data["m3508_gains"] = {
                 "kp": wheel_fb.m3508_gains[0].kp,  # type: ignore[index]
                 "ki": wheel_fb.m3508_gains[0].ki,  # type: ignore[index]
                 "kd": wheel_fb.m3508_gains[0].kd,  # type: ignore[index]
-            },
-            "m3508_terms": {
+            }
+        else:
+            self.get_logger().warn("m3508_gains is empty in wheel_feedback")
+
+        if wheel_fb.m3508_terms:
+            data["m3508_terms"] = {
                 "fl": {
                     "p": wheel_fb.m3508_terms[0].fl.p,  # type: ignore[index]
                     "i": wheel_fb.m3508_terms[0].fl.i,  # type: ignore[index]
@@ -208,8 +234,9 @@ class RobotController(Node):
                     "i": wheel_fb.m3508_terms[0].rr.i,  # type: ignore[index]
                     "d": wheel_fb.m3508_terms[0].rr.d,  # type: ignore[index]
                 },
-            },
-        }
+            }
+        else:
+            self.get_logger().warn("m3508_terms is empty in wheel_feedback")
 
         if hand_fb is not None:
             self._hand_fb_warned = False  # 再接続時にフラグをリセット
@@ -241,11 +268,43 @@ class RobotController(Node):
         if self._nav_mode == "auto":
             return
 
+        now = time.monotonic()
+        dt = now - self._last_cmd_time
+        self._last_cmd_time = now
+
+        OMEGA_THRESHOLD = 0.05  # rad/s: これ以下を「直進」とみなす
+        VELOCITY_THRESHOLD = 0.01  # m/s: これ以下を「停止」とみなす
+        cmd_omega = self.m3508_cntl.target_omega
+        is_moving = self.m3508_cntl.target_velocity.length() > VELOCITY_THRESHOLD
+        omega_correction = 0.0
+
+        if self._current_yaw is not None:
+            if not is_moving or abs(cmd_omega) > OMEGA_THRESHOLD:
+                # 停止中または意図的な旋回中は target_yaw を追従・PID をリセット
+                # （停止時にその場旋回で補正する挙動を防ぐ）
+                self._target_yaw = self._current_yaw
+                self._heading_pid.reset()
+            else:
+                if self._target_yaw is None:
+                    self._target_yaw = self._current_yaw
+                omega_correction = self._heading_pid.compute(
+                    self._target_yaw, self._current_yaw, dt
+                )
+
+        # ベース RPM（並進 + 意図的旋回）をスケーリング込みで計算し、
+        # ヨー補正はスケーリング後に個別クランプで加算する。
+        # omega_correction を calc_motor_rpms に混ぜると比例スケーリングで消えるため分離する。
+        base_rpms = self.m3508_cntl.calc_motor_rpms(
+            self.m3508_cntl.target_velocity,
+            cmd_omega,
+        )
+        corrected_rpms = self.m3508_cntl.apply_omega_correction(base_rpms, omega_correction)
+
         wheel_msg = WheelMessage()
-        wheel_msg.m3508_rpms.fl = self.m3508_cntl.target_rpm_fl
-        wheel_msg.m3508_rpms.fr = self.m3508_cntl.target_rpm_fr
-        wheel_msg.m3508_rpms.rl = self.m3508_cntl.target_rpm_rl
-        wheel_msg.m3508_rpms.rr = self.m3508_cntl.target_rpm_rr
+        wheel_msg.m3508_rpms.fl = corrected_rpms[0]
+        wheel_msg.m3508_rpms.fr = corrected_rpms[1]
+        wheel_msg.m3508_rpms.rl = corrected_rpms[2]
+        wheel_msg.m3508_rpms.rr = corrected_rpms[3]
 
         if (
             self.m3508_cntl.target_kp is not None
