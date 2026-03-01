@@ -2,7 +2,8 @@
 マッピング用ランチファイル
 
 起動するノード:
-  - micro_ros_agent        (ESP32 ↔ ROS2 ブリッジ, /dev/ttyUSB0)
+  - micro_ros_agent (cwmc)  (ESP32 ↔ ROS2 ブリッジ, /dev/esp32_c)
+  - micro_ros_agent (hwmc)  (ESP32 ↔ ROS2 ブリッジ, /dev/esp32_h)
   - ydlidar_ros2_driver    (LiDAR)
   - static_tf              (base_link → laser_frame)
   - laser_filter           (/scan → /scan_filtered, タイヤ映り込み除去)
@@ -17,7 +18,7 @@
 
 使い方:
   ros2 launch auto_nav mapping_launch.py
-  ros2 launch auto_nav mapping_launch.py serial_port:=/dev/ttyUSB1  # ポートを変える場合
+  ros2 launch auto_nav mapping_launch.py transport:=udp4  # Wi-Fi 接続（cwmc:8888, hwmc:8889）
 """
 
 import os
@@ -53,38 +54,55 @@ def generate_launch_description():
     slam_params = os.path.join(auto_nav_share, "config", "slam_mapping_params.yaml")
     ekf_params = os.path.join(auto_nav_share, "config", "ekf_params.yaml")
 
-    serial_port_arg = DeclareLaunchArgument(
-        "serial_port",
-        default_value="/dev/ttyUSB0",
-        description="シリアル接続時の ESP32 のポート（transport:=serial のときのみ使用）",
-    )
-
     transport_arg = DeclareLaunchArgument(
         "transport",
         default_value="serial",
-        description="micro-ROS agent の接続方式: 'serial'（USB）または 'udp4'（Wi-Fi, port 8888）",
+        description="micro-ROS agent の接続方式: 'serial'（USB, /dev/esp32_c + /dev/esp32_h）または 'udp4'（Wi-Fi, cwmc:8888 / hwmc:8889）",
     )
 
+    _is_serial = IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "serial"']))
+    _is_udp = IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "udp4"']))
+
     # シリアル接続（transport:=serial, デフォルト）
-    micro_ros_agent_serial = Node(
+    micro_ros_agent_serial_c = Node(
         package="micro_ros_agent",
         executable="micro_ros_agent",
-        name="micro_ros_agent",
-        arguments=["serial", "--dev", LaunchConfiguration("serial_port")],
+        name="micro_ros_agent_c",
+        arguments=["serial", "--dev", "/dev/esp32_c"],
         output="screen",
         emulate_tty=True,
-        condition=IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "serial"'])),
+        condition=_is_serial,
+    )
+
+    micro_ros_agent_serial_h = Node(
+        package="micro_ros_agent",
+        executable="micro_ros_agent",
+        name="micro_ros_agent_h",
+        arguments=["serial", "--dev", "/dev/esp32_h"],
+        output="screen",
+        emulate_tty=True,
+        condition=_is_serial,
     )
 
     # UDP 接続（transport:=udp4, Wi-Fi 経由）
-    micro_ros_agent_udp = Node(
+    micro_ros_agent_udp_c = Node(
         package="micro_ros_agent",
         executable="micro_ros_agent",
-        name="micro_ros_agent",
+        name="micro_ros_agent_c",
         arguments=["udp4", "--port", "8888"],
         output="screen",
         emulate_tty=True,
-        condition=IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "udp4"'])),
+        condition=_is_udp,
+    )
+
+    micro_ros_agent_udp_h = Node(
+        package="micro_ros_agent",
+        executable="micro_ros_agent",
+        name="micro_ros_agent_h",
+        arguments=["udp4", "--port", "8889"],
+        output="screen",
+        emulate_tty=True,
+        condition=_is_udp,
     )
 
     ydlidar_launch = IncludeLaunchDescription(
@@ -237,10 +255,11 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            serial_port_arg,
             transport_arg,
-            micro_ros_agent_serial,
-            micro_ros_agent_udp,
+            micro_ros_agent_serial_c,
+            micro_ros_agent_serial_h,
+            micro_ros_agent_udp_c,
+            micro_ros_agent_udp_h,
             ydlidar_launch,
             static_tf_node,
             laser_filter_node,

@@ -1157,3 +1157,44 @@ ros2 topic echo /bluetooth_tx
 **注意事項:**
 - nav_goal 送信後、ロボットが動き出すまで 5〜8 秒かかる（ActionClient の wait_for_server のため）
 - MIN_RPM=700 はチューニング値。速すぎる・止まれない場合は下げること
+
+---
+
+### 2026-03-01
+
+**フェーズ10: 壁基準ウェイポイント自動生成** ✅
+
+作成ファイル:
+- `src/auto_nav/config/waypoints_relative.yaml`: 壁からの相対距離でウェイポイントを定義するテンプレート
+- `src/auto_nav/scripts/generate_waypoints.py`: PGM マップを解析して絶対座標の waypoints.yaml を生成するスタンドアロンスクリプト
+
+実装上の注意:
+- PGM 読み込みは純粋 Python（Pillow 不要）。P2(ASCII)/P5(binary) 両対応
+- 壁検出: 各列/各行で occupied ピクセルの最小・最大を取り statistics.median で外れ値除去
+- 占有判定閾値: YAML の `occupied_thresh` から自動計算（`--occupied-thresh` で上書き可能）
+- `--dry-run` オプションで検出結果・生成座標の確認のみ可能（ファイル書き出しなし）
+- CMakeLists.txt の `file(GLOB PYTHON_SCRIPTS "scripts/*.py")` で自動インストール対象になるため追加変更不要
+
+競技運用フロー:
+```bash
+# [1] マッピング後、PGM 形式でマップ保存
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
+  "filename: '/home/taiga/maps/field'"
+ros2 run nav2_map_server map_saver_cli -f /home/taiga/maps/field \
+  --ros-args -p use_sim_time:=false
+
+# [2] ウェイポイント自動生成（5秒程度）
+python3 src/auto_nav/scripts/generate_waypoints.py \
+  --map /home/taiga/maps/field.pgm \
+  --meta /home/taiga/maps/field.yaml \
+  --relative src/auto_nav/config/waypoints_relative.yaml \
+  --output src/auto_nav/config/waypoints.yaml
+
+# [3] 確認のみ（dry-run）
+python3 src/auto_nav/scripts/generate_waypoints.py \
+  --map /home/taiga/maps/field.pgm \
+  --meta /home/taiga/maps/field.yaml \
+  --relative src/auto_nav/config/waypoints_relative.yaml \
+  --output src/auto_nav/config/waypoints.yaml \
+  --dry-run
+```
