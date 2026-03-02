@@ -34,7 +34,7 @@
         ↓ 約1〜2分
 ② 地図保存
    ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
-     "filename: '/home/taiga/maps/field'"
+     "filename: '/home/pi/maps/field'"
         ↓
 ③ ローカリゼーションモードへ切り替え
    auto_nav_launch.py で起動（map:= で保存済み地図を指定）
@@ -122,21 +122,29 @@ ros2 service call /slam_toolbox/get_state lifecycle_msgs/srv/GetState
 
 `mapping_launch.py` では `TimerAction(period=3.0) + ExecuteProcess(bash -c "service call × 2")` で自動化済み。
 
-**地図保存（重要: serialize_map を使うこと）:**
+**地図保存（用途で使い分け）:**
 
 ```bash
-# save_map は nav2_map_saver が必要で result=255 で失敗する。serialize_map を使うこと。
-mkdir -p /home/taiga/maps
+# ※ 以下どちらも mapping_launch.py 起動中（slam_toolbox が動いている間）に実行すること
+
+# [1] slam_toolbox ネイティブ形式（マッピング再開・精度保持用）
+mkdir -p /home/pi/maps
 ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
-  "filename: '/home/taiga/maps/field'"
-# → field.posegraph (19MB) + field.data (8.9MB) が生成される
+  "filename: '/home/pi/maps/field'"
+# → field.posegraph + field.data が生成される
+
+# [2] Nav2 / generate_waypoints.py 用 pgm/yaml 形式
+# map_subscribe_transient_local:=true 必須（slam_toolbox は TRANSIENT_LOCAL で /map を配信）
+ros2 run nav2_map_server map_saver_cli -f /home/pi/maps/field \
+  --ros-args -p use_sim_time:=false -p map_subscribe_transient_local:=true
+# → field.pgm + field.yaml が生成される
 ```
 
 **ローカリゼーション起動:**
 
 ```bash
 # 注意: 拡張子なし（.posegraph は不要）
-ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field
 ```
 
 **実施結果（2026-02-23）:**
@@ -186,7 +194,7 @@ waypoints:
 **座標確認手順:**
 
 ```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field
 # RViz2 で PoseStamped をパブリッシュして地図上の位置を目視確認
 ros2 topic pub /check_waypoint geometry_msgs/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: 2.1, y: 0.5, z: 0.0}}}" --once
@@ -235,7 +243,7 @@ MANUAL ──nav_mode:auto──→ AUTO_IDLE ──nav_goal──→ NAVIGATING
 **動作確認コマンド:**
 
 ```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field transport:=udp4
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field transport:=udp4
 
 # 別ターミナルで監視
 ros2 topic echo /bluetooth_tx
@@ -293,7 +301,7 @@ ros2 topic pub /bluetooth_rx std_msgs/msg/String \
 **実走行テスト（未実施）:**
 
 ```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field
 rviz2
 # 追加: Map(/map), LaserScan(/scan_filtered), Path(/plan), Path(/local_plan),
 #        Costmap(/global_costmap/costmap), Costmap(/local_costmap/costmap), TF
@@ -356,7 +364,7 @@ ros2 launch auto_nav mapping_launch.py
 
 起動コマンド:
 ```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field
 ```
 
 #### 最終統合テスト（フェーズ 5 完了後）
@@ -738,8 +746,8 @@ waypoints:
 **使い方:**
 ```bash
 python3 src/auto_nav/scripts/generate_waypoints.py \
-  --map /home/taiga/maps/field.pgm \
-  --meta /home/taiga/maps/field.yaml \
+  --map /home/pi/maps/field.pgm \
+  --meta /home/pi/maps/field.yaml \
   --relative src/auto_nav/config/waypoints_relative.yaml \
   --output src/auto_nav/config/waypoints.yaml
 ```
@@ -766,10 +774,11 @@ python3 src/auto_nav/scripts/generate_waypoints.py \
 **事前準備（マッピングフローへの追記）:** `serialize_map` の後に以下も実行する:
 ```bash
 # PGM マップファイルも保存する（generate_waypoints.py が必要とする）
+# ※ mapping_launch.py 起動中（slam_toolbox が動いている間）に実行すること
 ros2 run nav2_map_server map_saver_cli \
-  -f /home/taiga/maps/field \
-  --ros-args -p use_sim_time:=false
-# → /home/taiga/maps/field.pgm + /home/taiga/maps/field.yaml が生成される
+  -f /home/pi/maps/field \
+  --ros-args -p use_sim_time:=false -p map_subscribe_transient_local:=true
+# → /home/pi/maps/field.pgm + /home/pi/maps/field.yaml が生成される
 ```
 
 **壁検出の精度注意点:**
@@ -927,8 +936,9 @@ sudo apt install \
 - 地図保存: `serialize_map` で `field.posegraph` (19MB) + `field.data` (8.9MB) 生成
 
 地図保存で判明した注意点:
-- `save_map` は nav2_map_saver が必要で **result=255 で失敗する**
-- 正しいコマンドは `serialize_map`（slam_toolbox ネイティブ形式）を使うこと
+- `map_saver_cli` は slam_toolbox が **動いている間** に実行すること（/map の Publisher count が 0 だと失敗）
+- slam_toolbox は /map を TRANSIENT_LOCAL で配信するため `map_subscribe_transient_local:=true` が必須
+- `serialize_map`（slam_toolbox ネイティブ形式）は常に推奨。pgm/yaml が必要なときは上記 2 条件を満たした上で `map_saver_cli` を使う
 
 ---
 
@@ -1140,7 +1150,7 @@ Bluetooth コマンドを受け取り Nav2 NavigateToPose ActionServer にゴー
 **動作確認コマンド:**
 ```bash
 # 1. 起動
-ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field transport:=udp4
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field transport:=udp4
 
 # 2. 起動後 5 秒待ってから auto モードに切り替え
 ros2 topic pub /bluetooth_rx std_msgs/String \
@@ -1177,24 +1187,107 @@ ros2 topic echo /bluetooth_tx
 
 競技運用フロー:
 ```bash
-# [1] マッピング後、PGM 形式でマップ保存
+# [1] マッピング後、PGM 形式でマップ保存（mapping_launch.py 起動中に実行）
 ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
-  "filename: '/home/taiga/maps/field'"
-ros2 run nav2_map_server map_saver_cli -f /home/taiga/maps/field \
-  --ros-args -p use_sim_time:=false
+  "filename: '/home/pi/maps/field'"
+ros2 run nav2_map_server map_saver_cli -f /home/pi/maps/field \
+  --ros-args -p use_sim_time:=false -p map_subscribe_transient_local:=true
 
 # [2] ウェイポイント自動生成（5秒程度）
 python3 src/auto_nav/scripts/generate_waypoints.py \
-  --map /home/taiga/maps/field.pgm \
-  --meta /home/taiga/maps/field.yaml \
+  --map /home/pi/maps/field.pgm \
+  --meta /home/pi/maps/field.yaml \
   --relative src/auto_nav/config/waypoints_relative.yaml \
   --output src/auto_nav/config/waypoints.yaml
 
 # [3] 確認のみ（dry-run）
 python3 src/auto_nav/scripts/generate_waypoints.py \
-  --map /home/taiga/maps/field.pgm \
-  --meta /home/taiga/maps/field.yaml \
+  --map /home/pi/maps/field.pgm \
+  --meta /home/pi/maps/field.yaml \
   --relative src/auto_nav/config/waypoints_relative.yaml \
   --output src/auto_nav/config/waypoints.yaml \
   --dry-run
+```
+
+---
+
+### 2026-03-02
+
+**フェーズ 9: 競技対応機能（on_arrive シーケンス + start_auto + コート切り替え）** ✅
+
+変更ファイル:
+- `src/auto_nav/src/auto_nav/routing_node.py`: on_arrive シーケンス・start_auto/stop_auto・set_court・コート座標変換を追加
+- `src/robot_control/src/robot_control/ros2_node.py`: `send_control_command` を変更（hand_control を auto モードでも送信）
+
+**routing_node.py の主な変更点:**
+
+| 追加要素 | 内容 |
+|---------|------|
+| `_current_court` | "blue"/"red" を保持。`_handle_set_court` で更新 |
+| `_pub_rx` | `bluetooth_rx` への Publisher（on_arrive の hand_control コマンド転送用） |
+| `_auto_seq_names` | `waypoints.yaml` の `auto_sequence` リストを読み込み |
+| `_sequence_abort` | `threading.Event` でシーケンス中断を制御 |
+| `_auto_seq_running` / `_auto_seq_index` | `start_auto` シーケンスの進捗管理 |
+| `_result_cb` | Nav2 SUCCEEDED 後に `on_arrive` を別スレッドで実行。CANCELED 時は二重発行を防止 |
+| `_run_on_arrive_sequence` | `hand_control` アクションを `bluetooth_rx` に publish、`wait` は 50ms チェック付き中断可能スリープ |
+| `_on_sequence_done` | シーケンス完了後の処理。auto_sequence 実行中なら次へ進む |
+| `_apply_court_transform` | 赤コートは `(x, y, theta) → (x, -y, -theta)` |
+| `_handle_start_auto` | `auto_sequence` 先頭から `_advance_auto_sequence` を開始 |
+| `_handle_stop_auto` | ゴールキャンセル + シーケンス中断 |
+| `_advance_auto_sequence` | 現在インデックスのウェイポイントへ `_handle_goal` を呼び出し |
+
+**状態遷移（変更後）:**
+```
+MANUAL ──nav_mode:auto──→ AUTO_IDLE ──nav_goal/start_auto──→ NAVIGATING
+  ↑                          ↑   ↑                                │
+  └──nav_mode:manual──────────┘   └── AUTO_IDLE ←── SEQUENCE ←───┘
+                                       ↑
+                              全ウェイポイント完了
+```
+
+**ros2_node.py の変更点:**
+- `send_control_command` を `if self._nav_mode == "auto": return` から改造
+- `now / dt / _last_cmd_time` の更新を auto モードでも実行（auto→manual 切り替え時の dt 爆発を防止）
+- `wheel_control` の送信は `if self._nav_mode != "auto":` ブロック内に限定
+- `hand_control` の送信はブロック外（auto/manual 両モードで毎 50ms 送信）
+
+**on_arrive の hand_control 転送フロー:**
+```
+routing_node._run_on_arrive_sequence
+  → _pub_rx.publish("bluetooth_rx": {"type": "hand_control", ...})
+  → robot_control.on_controller_command が受信
+  → hands_cntl.set_target(target, control_type, value)
+  → send_control_command（auto モードでも動作）が hand_control を hwmc ESP32 に送信
+```
+
+**動作確認コマンド:**
+```bash
+# 起動
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field transport:=udp4
+
+# 監視用（別ターミナル）
+ros2 topic echo /bluetooth_tx
+ros2 topic echo /hand_control
+
+# テスト1: on_arrive シーケンス
+ros2 topic pub /bluetooth_rx std_msgs/String \
+  '{data: "{\"type\": \"nav_mode\", \"mode\": \"auto\"}"}' --once
+ros2 topic pub /bluetooth_rx std_msgs/String \
+  '{data: "{\"type\": \"nav_goal\", \"waypoint\": \"waypoint_1\"}"}' --once
+# 期待: navigating → arrived（on_arrive 完了後）、/hand_control に変化
+
+# テスト2: start_auto シーケンス
+ros2 topic pub /bluetooth_rx std_msgs/String \
+  '{data: "{\"type\": \"start_auto\"}"}' --once
+# 期待: navigating → arrived(1) → navigating(2) → ... → completed
+
+# テスト3: 中断
+ros2 topic pub /bluetooth_rx std_msgs/String \
+  '{data: "{\"type\": \"nav_mode\", \"mode\": \"manual\"}"}' --once
+# 期待: cancelled、手動操縦に復帰
+
+# テスト4: コート切り替え（赤）
+ros2 topic pub /bluetooth_rx std_msgs/String \
+  '{data: "{\"type\": \"set_court\", \"court\": \"red\"}"}' --once
+# 期待: Y 座標が反転されてゴール送信
 ```

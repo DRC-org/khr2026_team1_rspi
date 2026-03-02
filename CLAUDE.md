@@ -132,11 +132,20 @@ ros2 topic pub /nav_mode std_msgs/String "data: 'manual'" --once
 ros2 topic pub /cmd_vel geometry_msgs/Twist \
   "{linear: {x: 0.2, y: 0.0, z: 0.0}, angular: {z: 0.0}}" --once
 
-# SLAM 地図保存（slam_toolbox ネイティブ形式 .posegraph + .data）
-# ※ save_map は nav2_map_saver が必要で失敗する。serialize_map を使うこと
-mkdir -p /home/taiga/maps
+# SLAM 地図保存 ― 用途に応じて使い分ける
+#
+# [1] slam_toolbox ネイティブ形式（.posegraph + .data）
+#     → マッピング再開・精度保持に使う
+mkdir -p /home/pi/maps
 ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
-  "filename: '/home/taiga/maps/field'"
+  "filename: '/home/pi/maps/field'"
+#
+# [2] Nav2 用 pgm/yaml 形式（ウェイポイント自動生成・map_server に必要）
+#     slam_toolbox は /map を TRANSIENT_LOCAL で配信するため
+#     map_subscribe_transient_local:=true が必須（これがないと "Failed to spin map subscription"）
+mkdir -p /home/pi/maps
+ros2 run nav2_map_server map_saver_cli -f /home/pi/maps/field \
+  --ros-args -p use_sim_time:=false -p map_subscribe_transient_local:=true
 ```
 
 ---

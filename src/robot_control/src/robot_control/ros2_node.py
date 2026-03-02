@@ -263,61 +263,60 @@ class RobotController(Node):
     def send_control_command(self) -> None:
         """
         ESP32 へコマンドを送信する。50 ms ごとに呼び出される。
-        auto モード中は cmd_vel_bridge が wheel_control を担当するためスキップする。
+        wheel_control は manual モードのみ送信（auto モードは cmd_vel_bridge が担当）。
+        hand_control は auto/manual 両モードで送信（on_arrive シーケンス対応）。
         """
-        if self._nav_mode == "auto":
-            return
-
         now = time.monotonic()
         dt = now - self._last_cmd_time
         self._last_cmd_time = now
 
-        OMEGA_THRESHOLD = 0.05  # rad/s: これ以下を「直進」とみなす
-        VELOCITY_THRESHOLD = 0.01  # m/s: これ以下を「停止」とみなす
-        cmd_omega = self.m3508_cntl.target_omega
-        is_moving = self.m3508_cntl.target_velocity.length() > VELOCITY_THRESHOLD
-        omega_correction = 0.0
+        if self._nav_mode != "auto":
+            OMEGA_THRESHOLD = 0.05  # rad/s: これ以下を「直進」とみなす
+            VELOCITY_THRESHOLD = 0.01  # m/s: これ以下を「停止」とみなす
+            cmd_omega = self.m3508_cntl.target_omega
+            is_moving = self.m3508_cntl.target_velocity.length() > VELOCITY_THRESHOLD
+            omega_correction = 0.0
 
-        if self._current_yaw is not None:
-            if not is_moving or abs(cmd_omega) > OMEGA_THRESHOLD:
-                # 停止中または意図的な旋回中は target_yaw を追従・PID をリセット
-                # （停止時にその場旋回で補正する挙動を防ぐ）
-                self._target_yaw = self._current_yaw
-                self._heading_pid.reset()
-            else:
-                if self._target_yaw is None:
+            if self._current_yaw is not None:
+                if not is_moving or abs(cmd_omega) > OMEGA_THRESHOLD:
+                    # 停止中または意図的な旋回中は target_yaw を追従・PID をリセット
+                    # （停止時にその場旋回で補正する挙動を防ぐ）
                     self._target_yaw = self._current_yaw
-                omega_correction = self._heading_pid.compute(
-                    self._target_yaw, self._current_yaw, dt
-                )
+                    self._heading_pid.reset()
+                else:
+                    if self._target_yaw is None:
+                        self._target_yaw = self._current_yaw
+                    omega_correction = self._heading_pid.compute(
+                        self._target_yaw, self._current_yaw, dt
+                    )
 
-        # ベース RPM（並進 + 意図的旋回）をスケーリング込みで計算し、
-        # ヨー補正はスケーリング後に個別クランプで加算する。
-        # omega_correction を calc_motor_rpms に混ぜると比例スケーリングで消えるため分離する。
-        base_rpms = self.m3508_cntl.calc_motor_rpms(
-            self.m3508_cntl.target_velocity,
-            cmd_omega,
-        )
-        corrected_rpms = self.m3508_cntl.apply_omega_correction(base_rpms, omega_correction)
+            # ベース RPM（並進 + 意図的旋回）をスケーリング込みで計算し、
+            # ヨー補正はスケーリング後に個別クランプで加算する。
+            # omega_correction を calc_motor_rpms に混ぜると比例スケーリングで消えるため分離する。
+            base_rpms = self.m3508_cntl.calc_motor_rpms(
+                self.m3508_cntl.target_velocity,
+                cmd_omega,
+            )
+            corrected_rpms = self.m3508_cntl.apply_omega_correction(base_rpms, omega_correction)
 
-        wheel_msg = WheelMessage()
-        wheel_msg.m3508_rpms.fl = corrected_rpms[0]
-        wheel_msg.m3508_rpms.fr = corrected_rpms[1]
-        wheel_msg.m3508_rpms.rl = corrected_rpms[2]
-        wheel_msg.m3508_rpms.rr = corrected_rpms[3]
+            wheel_msg = WheelMessage()
+            wheel_msg.m3508_rpms.fl = corrected_rpms[0]
+            wheel_msg.m3508_rpms.fr = corrected_rpms[1]
+            wheel_msg.m3508_rpms.rl = corrected_rpms[2]
+            wheel_msg.m3508_rpms.rr = corrected_rpms[3]
 
-        if (
-            self.m3508_cntl.target_kp is not None
-            and self.m3508_cntl.target_ki is not None
-            and self.m3508_cntl.target_kd is not None
-        ):
-            gains = PIDGains()
-            gains.kp = self.m3508_cntl.target_kp
-            gains.ki = self.m3508_cntl.target_ki
-            gains.kd = self.m3508_cntl.target_kd
-            wheel_msg.m3508_gains = [gains]  # type: ignore[assignment]
+            if (
+                self.m3508_cntl.target_kp is not None
+                and self.m3508_cntl.target_ki is not None
+                and self.m3508_cntl.target_kd is not None
+            ):
+                gains = PIDGains()
+                gains.kp = self.m3508_cntl.target_kp
+                gains.ki = self.m3508_cntl.target_ki
+                gains.kd = self.m3508_cntl.target_kd
+                wheel_msg.m3508_gains = [gains]  # type: ignore[assignment]
 
-        self.pub_wheel_control.publish(wheel_msg)
+            self.pub_wheel_control.publish(wheel_msg)
 
         hand_msg = HandMessage()
         hand_msg.yagura_1.pos = self.hands_cntl.yagura_1_pos
