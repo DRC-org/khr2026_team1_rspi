@@ -124,7 +124,7 @@ class RobotController(Node):
     def on_controller_command(self, msg: String) -> None:
         try:
             command: dict = json.loads(msg.data)
-            self.get_logger().info(f"From controller: {command}")
+            self.get_logger().debug(f"From controller: {command}")
 
             if "type" not in command:
                 return
@@ -210,7 +210,7 @@ class RobotController(Node):
                 "kd": wheel_fb.m3508_gains[0].kd,  # type: ignore[index]
             }
         else:
-            self.get_logger().warn("m3508_gains is empty in wheel_feedback")
+            self.get_logger().debug("m3508_gains is empty in wheel_feedback")
 
         if wheel_fb.m3508_terms:
             data["m3508_terms"] = {
@@ -236,7 +236,7 @@ class RobotController(Node):
                 },
             }
         else:
-            self.get_logger().warn("m3508_terms is empty in wheel_feedback")
+            self.get_logger().debug("m3508_terms is empty in wheel_feedback")
 
         if hand_fb is not None:
             self._hand_fb_warned = False  # 再接続時にフラグをリセット

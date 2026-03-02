@@ -35,6 +35,12 @@ class BluetoothROS2Node(Node):
         self.ble_thread: Optional[threading.Thread] = None
         self.event_loop: Optional[asyncio.AbstractEventLoop] = None
 
+        import logging as _pylogging
+        # ROS2 と Python logging の severity 値は一致（DEBUG=10, INFO=20...）
+        _pylogging.getLogger("BluetoothGATTServer").setLevel(
+            self.get_logger().get_effective_level()
+        )
+
         self.get_logger().info("Bluetooth ROS2 Node initialized")
         self.get_logger().info(f"HCI Transport: {self.hci_transport}")
 
@@ -69,11 +75,11 @@ class BluetoothROS2Node(Node):
         msg = String()
         msg.data = data
         self.rx_publisher.publish(msg)
-        self.get_logger().info(f"Published Bluetooth RX: {data}")
+        self.get_logger().debug(f"Published Bluetooth RX: {data}")
 
     def on_tx_message(self, msg: String):
         if self.ble_server and self.event_loop:
-            self.get_logger().info(f"Received TX message: {msg.data}")
+            self.get_logger().debug(f"Received TX message: {msg.data}")
             # Buffer latest data; the BLE event loop's periodic task will send it.
             # Using call_soon_threadsafe instead of run_coroutine_threadsafe
             # to prevent coroutine queue buildup that causes growing latency.

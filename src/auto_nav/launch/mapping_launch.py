@@ -54,6 +54,15 @@ def generate_launch_description():
     slam_params = os.path.join(auto_nav_share, "config", "slam_mapping_params.yaml")
     ekf_params = os.path.join(auto_nav_share, "config", "ekf_params.yaml")
 
+    debug_arg = DeclareLaunchArgument(
+        "debug",
+        default_value="false",
+        description="詳細ログを有効にする ('true' で --log-level debug を各ノードに適用)",
+    )
+    _log_level = PythonExpression(
+        ['"debug" if "', LaunchConfiguration("debug"), '" == "true" else "info"']
+    )
+
     transport_arg = DeclareLaunchArgument(
         "transport",
         default_value="serial",
@@ -121,6 +130,7 @@ def generate_launch_description():
         name="robot_control_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     bt_communication_node = Node(
@@ -130,6 +140,7 @@ def generate_launch_description():
         output="screen",
         emulate_tty=True,
         additional_env={"PYTHONPATH": _BT_PYTHONPATH},
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     odometry_node = Node(
@@ -138,6 +149,7 @@ def generate_launch_description():
         name="odometry_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     imu_publisher_node = Node(
@@ -146,6 +158,7 @@ def generate_launch_description():
         name="imu_publisher_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     # LiDAR scan-to-scan オドメトリ（icp_odometry, rtabmap_odom）
@@ -174,6 +187,7 @@ def generate_launch_description():
             ("scan", "/scan_filtered"),
             ("odom", "/scan_odom"),
         ],
+        ros_arguments=["--log-level", "warn"],
     )
 
     ekf_node = Node(
@@ -192,6 +206,7 @@ def generate_launch_description():
         name="cmd_vel_bridge_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     # LiDAR の TF: base_link → laser_frame
@@ -255,6 +270,7 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            debug_arg,
             transport_arg,
             micro_ros_agent_serial_c,
             micro_ros_agent_serial_h,

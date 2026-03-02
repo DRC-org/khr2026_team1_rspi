@@ -60,7 +60,7 @@ class BluetoothGATTServer:
             def on_rx_write(connection, value):
                 try:
                     text = value.decode("utf-8")
-                    self.logger.info(f"Received write from client: {text}")
+                    self.logger.debug(f"Received write from client: {text}")
                     try:
                         data = json.loads(text)
                         if (
@@ -70,7 +70,7 @@ class BluetoothGATTServer:
                             c_type = data.get("controller_type")
                             if c_type:
                                 self.connected_clients[connection]["type"] = c_type
-                                self.logger.info(
+                                self.logger.debug(
                                     f"Client {connection} type set to: {c_type}"
                                 )
                     except json.JSONDecodeError:
@@ -192,7 +192,7 @@ class BluetoothGATTServer:
                 now = loop.time()
                 if now - _dbg_last_log > 3.0:
                     if _dbg_count > 0:
-                        self.logger.info(
+                        self.logger.debug(
                             f"[BLE TX DEBUG] {_dbg_count} notifs in 3s "
                             f"({_dbg_count / 3:.1f}/s) | "
                             f"notify avg={_dbg_total_notify / _dbg_count * 1000:.1f}ms "
@@ -221,4 +221,4 @@ class BluetoothGATTServer:
         if self.tx_char and self.device:
             self.tx_char.value = data.encode("utf-8")
             await self.device.notify_subscribers(self.tx_char)
-            self.logger.info(f"Sent to client: {data}")
+            self.logger.debug(f"Sent to client: {data}")

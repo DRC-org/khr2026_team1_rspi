@@ -7,6 +7,7 @@ import time
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from nav2_msgs.action import NavigateToPose
+from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -44,12 +45,33 @@ class RoutingNode(Node):
         # on_arrive の hand_control コマンドを robot_control に転送するために使用
         self._pub_rx = self.create_publisher(String, "bluetooth_rx", 10)
 
+        self._robot_pos = {"x": 0.0, "y": 0.0, "angle": 0.0}
+        self._sub_odom = self.create_subscription(Odometry, "/odom", self._on_odom, 10)
+        self._timer_pos = self.create_timer(0.2, self._publish_robot_pos)
+
         self._action_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
 
         self._sequence_abort = threading.Event()
         self._sequence_thread: threading.Thread | None = None
         self._auto_seq_running: bool = False
         self._auto_seq_index: int = 0
+
+    def _on_odom(self, msg: Odometry) -> None:
+        x_mm = msg.pose.pose.position.x * 1000
+        y_mm = msg.pose.pose.position.y * 1000
+        qz = msg.pose.pose.orientation.z
+        qw = msg.pose.pose.orientation.w
+        angle_deg = math.degrees(2 * math.atan2(qz, qw))
+        self._robot_pos = {"x": x_mm, "y": y_mm, "angle": angle_deg}
+
+    def _publish_robot_pos(self) -> None:
+        pos = self._robot_pos
+        self._pub_tx.publish(String(data=json.dumps({
+            "type": "robot_pos",
+            "x": pos["x"],
+            "y": pos["y"],
+            "angle": pos["angle"],
+        })))
 
     def _on_bt_rx(self, msg: String) -> None:
         try:

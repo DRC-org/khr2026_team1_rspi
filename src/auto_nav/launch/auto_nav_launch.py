@@ -68,6 +68,15 @@ def generate_launch_description():
         description="保存済みマップのパス（拡張子なし）。例: /home/taiga/maps/field",
     )
 
+    debug_arg = DeclareLaunchArgument(
+        "debug",
+        default_value="false",
+        description="詳細ログを有効にする ('true' で --log-level debug を各ノードに適用)",
+    )
+    _log_level = PythonExpression(
+        ['"debug" if "', LaunchConfiguration("debug"), '" == "true" else "info"']
+    )
+
     transport_arg = DeclareLaunchArgument(
         "transport",
         default_value="serial",
@@ -159,6 +168,7 @@ def generate_launch_description():
         name="odometry_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     imu_publisher_node = Node(
@@ -167,6 +177,7 @@ def generate_launch_description():
         name="imu_publisher_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     scan_odometry_node = Node(
@@ -192,6 +203,7 @@ def generate_launch_description():
             ("scan", "/scan_filtered"),
             ("odom", "/scan_odom"),
         ],
+        ros_arguments=["--log-level", "warn"],
     )
 
     ekf_node = Node(
@@ -210,6 +222,7 @@ def generate_launch_description():
         name="cmd_vel_bridge_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     # slam_toolbox をローカリゼーションモードで起動
@@ -269,6 +282,7 @@ def generate_launch_description():
         name="routing_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     robot_control_node = Node(
@@ -277,6 +291,7 @@ def generate_launch_description():
         name="robot_control_node",
         output="screen",
         emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     bt_communication_node = Node(
@@ -286,6 +301,7 @@ def generate_launch_description():
         output="screen",
         emulate_tty=True,
         additional_env={"PYTHONPATH": _BT_PYTHONPATH},
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     web_server_node = Node(
@@ -295,11 +311,13 @@ def generate_launch_description():
         output="screen",
         emulate_tty=True,
         additional_env={"PYTHONPATH": _WEB_PYTHONPATH},
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
     return LaunchDescription(
         [
             map_arg,
+            debug_arg,
             transport_arg,
             micro_ros_agent_serial_c,
             micro_ros_agent_serial_h,
