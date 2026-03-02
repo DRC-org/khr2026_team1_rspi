@@ -47,6 +47,14 @@ _BT_VENV_SITE_PACKAGES = os.path.normpath(
 _existing = os.environ.get("PYTHONPATH", "")
 _BT_PYTHONPATH = _BT_VENV_SITE_PACKAGES + (":" + _existing if _existing else "")
 
+_WEB_VENV_SITE_PACKAGES = os.path.normpath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "../../../../../src/web_control/.venv/lib/python3.12/site-packages",
+    )
+)
+_WEB_PYTHONPATH = _WEB_VENV_SITE_PACKAGES + (":" + _existing if _existing else "")
+
 
 def generate_launch_description():
     auto_nav_share = get_package_share_directory("auto_nav")
@@ -280,6 +288,15 @@ def generate_launch_description():
         additional_env={"PYTHONPATH": _BT_PYTHONPATH},
     )
 
+    web_server_node = Node(
+        package="web_control",
+        executable="launch_web_server.py",
+        name="web_server_node",
+        output="screen",
+        emulate_tty=True,
+        additional_env={"PYTHONPATH": _WEB_PYTHONPATH},
+    )
+
     return LaunchDescription(
         [
             map_arg,
@@ -301,6 +318,7 @@ def generate_launch_description():
             routing_node,
             robot_control_node,
             bt_communication_node,
+            web_server_node,
             cmd_vel_bridge_node,
         ]
     )

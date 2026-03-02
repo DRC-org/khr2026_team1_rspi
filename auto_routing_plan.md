@@ -641,3 +641,21 @@ sudo apt install \
 ### 2026-03-02
 - **フェーズ 9**: routing_node.py に on_arrive シーケンス・start_auto/stop_auto・set_court・コート座標変換を追加
 - ros2_node.py: hand_control は auto/manual 両モードで送信するよう変更（wheel_control のみ auto モード時にスキップ）
+
+- **フェーズ 8**: WebSocket コントロールシステム実装
+  - `src/web_control/` パッケージ新規作成（aiohttp WebSocket ブリッジ、port 8080）
+  - `auto_nav_launch.py` に `web_server_node` を追加（`_WEB_PYTHONPATH` で aiohttp venv を参照）
+  - bt_controller: `useWebSocketConnect.tsx`（WS 接続管理フック）
+  - bt_controller: `CourtSelector.tsx`（コート選択コンポーネント）
+  - bt_controller: `useAutoNav.ts` をリファクタリング（引数を `sendJson` に抽象化、`court`/`progress`/`sendSetCourt`/`sendStartAuto`/`sendStopAuto` を追加）
+  - bt_controller: `AutoNav/index.tsx` を更新（BLE/WS タブ切り替え、コート選択、自動シーケンス制御 UI）
+
+  セットアップ（raspi 上で実行）:
+  ```bash
+  cd /home/pi/DRC/khr2026_team1_rspi/src/web_control
+  uv venv --system-site-packages
+  uv add aiohttp
+  cd /home/pi/DRC/khr2026_team1_rspi
+  colcon build --packages-select web_control --symlink-install
+  source install/setup.bash
+  ```
