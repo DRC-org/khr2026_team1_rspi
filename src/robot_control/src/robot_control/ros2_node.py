@@ -89,7 +89,7 @@ class RobotController(Node):
         self._hand_fb_warned = False  # ハンド未接続の WARN は初回のみ出す
 
         self._current_yaw: float | None = None
-        self._heading_pid = HeadingPID(kp=1.0, ki=0.0, kd=0.05)
+        self._heading_pid = HeadingPID(kp=0.6, ki=0.0, kd=0.05)
         self._target_yaw: float | None = None
         self._last_cmd_time = time.monotonic()
 
