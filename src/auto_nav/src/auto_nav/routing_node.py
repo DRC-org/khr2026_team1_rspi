@@ -250,9 +250,9 @@ class RoutingNode(Node):
     def _apply_court_transform(
         self, x: float, y: float, theta: float
     ) -> tuple[float, float, float]:
-        # 赤コートは青コートに対して Y 軸対称
+        # 赤コートは青コートに対して北南軸（Y軸）対称: X反転
         if self._current_court == "red":
-            return x, -y, -theta
+            return -x, y, math.pi - theta
         return x, y, theta
 
     def _handle_set_court(self, data: dict) -> None:

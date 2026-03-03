@@ -393,7 +393,7 @@ Bluetooth 版と完全に同一フォーマット。「共通リファレンス:
 
 | 機能 | 実装 |
 |------|------|
-| コート切り替え | `set_court` コマンドで `_current_court` を更新。赤コートは `(x, y, θ) → (x, -y, -θ)` |
+| コート切り替え | `set_court` コマンドで `_current_court` を更新。赤コートは `(x, y, θ) → (-x, y, π-θ)` |
 | on_arrive シーケンス | Nav2 SUCCEEDED 後、on_arrive リストを別スレッドで順次実行 |
 | start_auto | `auto_sequence` の先頭から `_advance_auto_sequence` を開始 |
 | stop_auto | ゴールキャンセル + `_sequence_abort` Event でシーケンス中断 |
@@ -637,6 +637,19 @@ sudo apt install \
 
 ### 2026-03-01
 - **フェーズ 10**: `generate_waypoints.py` + `waypoints_relative.yaml` 実装（PGM 純粋 Python 読み込み、P2/P5 両対応、`--dry-run` オプション付き）
+
+### 2026-03-03
+- **手動制御コート選択機能追加**: `Controller.tsx` にコート選択ボタン（青/赤）を追加
+  - 青コート選択時: l_x・l_y を符号反転（ロボットが南向きのため、北を前にするための 180° 回転）
+  - 赤コート選択時: 変換なし（ロボットが北向きのため、そのまま）
+  - コート選択時に `set_court` コマンドを送信（manual→auto 切替時に routing_node と同期）
+  - UI: BT 接続ボタン横に「青」「赤」ボタンを追加
+
+- **バグ修正**: `routing_node.py` の `_apply_court_transform` の赤コート変換が誤り
+  - 誤: `(x, -y, -θ)` ← 東西線（横線）対称になっていた
+  - 正: `(-x, y, π-θ)` ← 南北線（縦線）対称
+  - フィールドは赤（左）・青（右）コートが横並び、北南線で線対称。X軸反転が正しい
+  - θ 変換: 縦線反転では `π - θ`（東向き→西向き、北向き→北向きのまま）
 
 ### 2026-03-02
 - **フェーズ 9**: routing_node.py に on_arrive シーケンス・start_auto/stop_auto・set_court・コート座標変換を追加
