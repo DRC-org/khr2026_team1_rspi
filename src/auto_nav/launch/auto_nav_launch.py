@@ -162,6 +162,14 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
+    scan_relay_node = Node(
+        package="auto_nav",
+        executable="launch_scan_relay.py",
+        name="scan_relay_node",
+        output="screen",
+        emulate_tty=True,
+    )
+
     odometry_node = Node(
         package="auto_nav",
         executable="launch_odometry.py",
@@ -300,6 +308,7 @@ def generate_launch_description():
             ydlidar_launch,
             static_tf_node,
             laser_filter_node,
+            scan_relay_node,
             odometry_node,
             imu_publisher_node,
             ekf_node,
