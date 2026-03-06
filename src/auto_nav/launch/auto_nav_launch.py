@@ -18,8 +18,8 @@
   - laser_filter           (/scan → /scan_filtered)
   - odometry_node          (wheel_feedback → /odom_raw, エンコーダのみ)
   - imu_publisher_node     (wheel_feedback → /imu, gyro/accel)
-  - scan_odometry_node     (/scan_filtered → /scan_odom, LiDAR scan-to-scan)
-  - ekf_filter_node        (/odom_raw + /imu + /scan_odom → /odom + TF(odom→base_link))
+  # scan_odometry_node は CPU 負荷軽減のため除去（EKF odom1 が全 false のため不要）
+  - ekf_filter_node        (/odom_raw + /imu → /odom + TF(odom→base_link))
   - cmd_vel_bridge_node    (/cmd_vel → wheel_control, auto モード時のみ)
   - slam_toolbox           (localization モード, 保存済み地図で自己位置推定)
   - nav2_bringup           (controller_server / planner_server / behavior_server / bt_navigator)
@@ -180,32 +180,6 @@ def generate_launch_description():
         ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
-    scan_odometry_node = Node(
-        package="rtabmap_odom",
-        executable="icp_odometry",
-        name="scan_odometry_node",
-        output="screen",
-        emulate_tty=True,
-        parameters=[{
-            "frame_id": "base_link",
-            "odom_frame_id": "odom",
-            "subscribe_scan": True,
-            "publish_tf": False,
-            "Odom/Strategy": "0",
-            "Odom/GuessMotion": "true",
-            "Icp/PointToPlane": "false",
-            "Icp/MaxCorrespondenceDistance": "0.5",
-            "Icp/Iterations": "10",
-            "Icp/MaxTranslation": "1.0",
-            "Icp/MaxRotation": "0.785",
-        }],
-        remappings=[
-            ("scan", "/scan_filtered"),
-            ("odom", "/scan_odom"),
-        ],
-        ros_arguments=["--log-level", "warn"],
-    )
-
     ekf_node = Node(
         package="robot_localization",
         executable="ekf_node",
@@ -328,7 +302,6 @@ def generate_launch_description():
             laser_filter_node,
             odometry_node,
             imu_publisher_node,
-            scan_odometry_node,
             ekf_node,
             slam_toolbox_node,
             slam_lifecycle,

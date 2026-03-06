@@ -17,7 +17,7 @@ lifecycle_manager_navigation:
       - planner_server
       - behavior_server
       - bt_navigator
-    bond_timeout: 4.0
+    bond_timeout: 20.0
     attempt_respawn_reconnection: true
     bond_respawn_max_duration: 10.0
 
@@ -26,7 +26,7 @@ lifecycle_manager_navigation:
 # =============================================================================
 controller_server:
   ros__parameters:
-    controller_frequency: 20.0
+    controller_frequency: 7.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001  # メカナム: Y 方向停止判定を有効化
     min_theta_velocity_threshold: 0.001
@@ -70,11 +70,11 @@ controller_server:
       decel_lim_y: -2.5
       decel_lim_theta: -3.2
 
-      # --- サンプリング数 ---
-      vx_samples: 20
+      # --- サンプリング数（Raspberry Pi 負荷軽減のため削減）---
+      vx_samples: 10
       # メカナム: Y 方向もサンプリングして全方向軌跡を評価
-      vy_samples: 10
-      vtheta_samples: 20
+      vy_samples: 5
+      vtheta_samples: 10
 
       # --- 軌跡シミュレーション ---
       sim_time: 1.2
@@ -113,7 +113,7 @@ controller_server:
 # =============================================================================
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    expected_planner_frequency: 5.0
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_navfn_planner::NavfnPlanner"
@@ -183,9 +183,10 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: false
-      # フットプリント（矩形ポリゴン）: タイヤ中心距離 + 0.05m マージン
-      # 実機実測後に調整すること
-      footprint: "[[0.22, 0.29], [-0.22, 0.29], [-0.22, -0.29], [0.22, -0.29]]"
+      # グローバル計画用フットプリント（小さめ）: スタート地点が東壁から0.271mしかなく、
+      # SLAM誤差で壁セルが0.200mまで迫るため inscribed_radius=0.18m に抑える
+      # ローカルコストマップは実寸で衝突回避するため安全性は維持される
+      footprint: "[[0.18, 0.25], [-0.18, 0.25], [-0.18, -0.25], [0.18, -0.25]]"
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -210,8 +211,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        # 外接円半径 ≈ 0.363m に余裕を加えた値。壁衝突が多い場合は増やす
-        inflation_radius: 0.55
+        # スタート地点が東壁から0.271mしかなく、0.55mではスタートがブロック判定されるため削減
+        inflation_radius: 0.25
       always_send_full_costmap: true
 
 # =============================================================================
@@ -248,7 +249,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        inflation_radius: 0.35
       always_send_full_costmap: true
 
 # =============================================================================
@@ -305,7 +306,7 @@ route_server:
 # =============================================================================
 velocity_smoother:
   ros__parameters:
-    smoothing_frequency: 20.0
+    smoothing_frequency: 10.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
     # メカナム: [x, y, theta] の順。Y 方向速度を有効化

@@ -6,11 +6,13 @@ import time
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import Point, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class RoutingNode(Node):
@@ -44,12 +46,19 @@ class RoutingNode(Node):
         self._pub_tx = self.create_publisher(String, "bluetooth_tx", 10)
         # on_arrive の hand_control コマンドを robot_control に転送するために使用
         self._pub_rx = self.create_publisher(String, "bluetooth_rx", 10)
+        # 手動移動後に slam_toolbox のスキャンマッチング起点を更新するために使用
+        self._pub_initial_pose = self.create_publisher(
+            PoseWithCovarianceStamped, "/initialpose", 10
+        )
 
         self._robot_pos = {"x": 0.0, "y": 0.0, "angle": 0.0}
         self._sub_odom = self.create_subscription(Odometry, "/odom", self._on_odom, 10)
         self._timer_pos = self.create_timer(0.2, self._publish_robot_pos)
 
         self._action_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
+
+        self._pub_markers = self.create_publisher(MarkerArray, "/waypoint_markers", 10)
+        self.create_timer(1.0, self._publish_waypoint_markers)
 
         self._sequence_abort = threading.Event()
         self._sequence_thread: threading.Thread | None = None
@@ -87,7 +96,8 @@ class RoutingNode(Node):
         elif msg_type == "set_court":
             self._handle_set_court(data)
         elif msg_type == "start_auto":
-            self._handle_start_auto()
+            from_index = int(data.get("from_index", 0))
+            self._handle_start_auto(from_index)
         elif msg_type == "stop_auto":
             self._handle_stop_auto()
 
@@ -129,10 +139,12 @@ class RoutingNode(Node):
         self._current_goal_name = name
         self._state = "NAVIGATING"
         self._send_goal(x, y, theta)
-        self._pub_tx.publish(String(data=json.dumps({
-            "nav_status": "navigating",
-            "waypoint": name,
-        })))
+
+        nav_msg: dict = {"nav_status": "navigating", "waypoint": name}
+        if self._auto_seq_running:
+            nav_msg["seq_index"] = self._auto_seq_index
+            nav_msg["seq_total"] = len(self._auto_seq_names)
+        self._pub_tx.publish(String(data=json.dumps(nav_msg)))
 
     def _send_goal(self, x: float, y: float, theta: float) -> None:
         # navigate_to_pose サーバー未起動の場合は 5 秒待ってタイムアウト
@@ -143,6 +155,8 @@ class RoutingNode(Node):
             self._pub_tx.publish(String(data=json.dumps({
                 "nav_status": "error",
                 "message": "navigate_to_pose server not available",
+                "seq_index": self._auto_seq_index,
+                "seq_total": len(self._auto_seq_names),
             })))
             return
 
@@ -184,6 +198,8 @@ class RoutingNode(Node):
                 "nav_status": "error",
                 "waypoint": self._current_goal_name,
                 "message": f"navigation failed with status {result.status}",
+                "seq_index": self._auto_seq_index,
+                "seq_total": len(self._auto_seq_names),
             })))
             return
 
@@ -229,6 +245,12 @@ class RoutingNode(Node):
 
     def _on_sequence_done(self) -> None:
         if self._auto_seq_running:
+            self._pub_tx.publish(String(data=json.dumps({
+                "nav_status": "arrived",
+                "waypoint": self._current_goal_name,
+                "seq_index": self._auto_seq_index,
+                "seq_total": len(self._auto_seq_names),
+            })))
             self._auto_seq_index += 1
             if self._auto_seq_index < len(self._auto_seq_names):
                 self._advance_auto_sequence()
@@ -265,7 +287,7 @@ class RoutingNode(Node):
             "court": court,
         })))
 
-    def _handle_start_auto(self) -> None:
+    def _handle_start_auto(self, from_index: int = 0) -> None:
         if self._state == "MANUAL":
             self._pub_tx.publish(String(data=json.dumps({
                 "nav_status": "error",
@@ -278,10 +300,68 @@ class RoutingNode(Node):
                 "message": "auto_sequence is empty",
             })))
             return
+        if from_index < 0 or from_index >= len(self._auto_seq_names):
+            self._pub_tx.publish(String(data=json.dumps({
+                "nav_status": "error",
+                "message": f"invalid from_index: {from_index}",
+            })))
+            return
+
         self._auto_seq_running = True
-        self._auto_seq_index = 0
+        self._auto_seq_index = from_index
         self._sequence_abort.clear()
+
+        if from_index > 0:
+            # 手動移動後のリローカライズ: 別スレッドで initialpose publish + 3 秒待機後に開始
+            t = threading.Thread(
+                target=self._relocate_and_start,
+                args=(from_index,),
+                daemon=True,
+            )
+            t.start()
+        else:
+            self._advance_auto_sequence()
+
+    def _relocate_and_start(self, from_index: int) -> None:
+        wp_name = self._auto_seq_names[from_index]
+        self._publish_initial_pose_at_waypoint(wp_name)
+
+        # slam_toolbox のスキャンマッチング収束と Nav2 コストマップ更新を待つ
+        countdown = 3
+        for remaining in range(countdown, 0, -1):
+            if self._sequence_abort.is_set():
+                return
+            self._pub_tx.publish(String(data=json.dumps({
+                "nav_status": "relocating",
+                "countdown": remaining,
+                "waypoint": wp_name,
+                "seq_index": from_index,
+                "seq_total": len(self._auto_seq_names),
+            })))
+            time.sleep(1.0)
+
+        if self._sequence_abort.is_set():
+            return
         self._advance_auto_sequence()
+
+    def _publish_initial_pose_at_waypoint(self, wp_name: str) -> None:
+        wp = self._waypoints.get(wp_name)
+        if not wp:
+            return
+        x, y, theta = self._apply_court_transform(wp["x"], wp["y"], wp.get("theta", 0.0))
+
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.orientation.z = math.sin(theta / 2.0)
+        msg.pose.pose.orientation.w = math.cos(theta / 2.0)
+        # 位置 ±0.5m・角度 ±0.2 rad 程度を想定した共分散
+        msg.pose.covariance[0] = 0.25   # x
+        msg.pose.covariance[7] = 0.25   # y
+        msg.pose.covariance[35] = 0.04  # yaw
+        self._pub_initial_pose.publish(msg)
 
     def _handle_stop_auto(self) -> None:
         self._cancel_goal()
@@ -292,6 +372,93 @@ class RoutingNode(Node):
     def _advance_auto_sequence(self) -> None:
         name = self._auto_seq_names[self._auto_seq_index]
         self._handle_goal({"type": "nav_goal", "waypoint": name})
+
+    def _publish_waypoint_markers(self) -> None:
+        markers = MarkerArray()
+        now = self.get_clock().now().to_msg()
+
+        for i, name in enumerate(self._auto_seq_names):
+            wp = self._waypoints.get(name)
+            if not wp:
+                continue
+            x, y, _ = self._apply_court_transform(wp["x"], wp["y"], wp.get("theta", 0.0))
+
+            is_current = (
+                name == self._current_goal_name
+                and self._state in ("NAVIGATING", "SEQUENCE")
+            )
+            is_visited = self._auto_seq_running and i < self._auto_seq_index
+
+            # 球マーカー
+            m = Marker()
+            m.header.frame_id = "map"
+            m.header.stamp = now
+            m.ns = "waypoints"
+            m.id = i
+            m.type = Marker.SPHERE
+            m.action = Marker.ADD
+            m.pose.position.x = x
+            m.pose.position.y = y
+            m.pose.position.z = 0.1
+            m.pose.orientation.w = 1.0
+            if is_current:
+                m.scale.x = m.scale.y = m.scale.z = 0.30
+                m.color.r, m.color.g, m.color.b, m.color.a = 1.0, 1.0, 0.0, 1.0
+            elif is_visited:
+                m.scale.x = m.scale.y = m.scale.z = 0.15
+                m.color.r, m.color.g, m.color.b, m.color.a = 0.4, 0.4, 0.4, 0.6
+            else:
+                m.scale.x = m.scale.y = m.scale.z = 0.20
+                m.color.r, m.color.g, m.color.b, m.color.a = 0.3, 0.7, 1.0, 0.9
+            markers.markers.append(m)
+
+            # テキストラベル
+            t = Marker()
+            t.header.frame_id = "map"
+            t.header.stamp = now
+            t.ns = "labels"
+            t.id = i
+            t.type = Marker.TEXT_VIEW_FACING
+            t.action = Marker.ADD
+            t.pose.position.x = x
+            t.pose.position.y = y
+            t.pose.position.z = 0.35
+            t.pose.orientation.w = 1.0
+            t.scale.z = 0.12
+            t.color.r, t.color.g, t.color.b, t.color.a = 1.0, 1.0, 1.0, 1.0
+            t.text = name
+            markers.markers.append(t)
+
+        # 残りルート（LINE_STRIP）
+        if self._auto_seq_running:
+            line = Marker()
+            line.header.frame_id = "map"
+            line.header.stamp = now
+            line.ns = "route"
+            line.id = 0
+            line.type = Marker.LINE_STRIP
+            line.action = Marker.ADD
+            line.scale.x = 0.04
+            line.color.r, line.color.g, line.color.b, line.color.a = 0.0, 1.0, 0.3, 0.8
+            for name in self._auto_seq_names[self._auto_seq_index:]:
+                wp = self._waypoints.get(name)
+                if not wp:
+                    continue
+                x, y, _ = self._apply_court_transform(wp["x"], wp["y"], wp.get("theta", 0.0))
+                p = Point()
+                p.x = x
+                p.y = y
+                p.z = 0.05
+                line.points.append(p)
+            markers.markers.append(line)
+        else:
+            del_marker = Marker()
+            del_marker.ns = "route"
+            del_marker.id = 0
+            del_marker.action = Marker.DELETE
+            markers.markers.append(del_marker)
+
+        self._pub_markers.publish(markers)
 
     def _cancel_goal(self) -> None:
         if self._goal_handle:

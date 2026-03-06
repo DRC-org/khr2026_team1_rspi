@@ -1,9 +1,11 @@
 import math
 
 import rclpy
+from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from robot_msgs.msg import WheelMessage
+import tf2_ros
 
 
 # robot_control/constants.py と同じ値を使う
@@ -41,6 +43,7 @@ class OdometryNode(Node):
             WheelMessage, "wheel_feedback", self._on_feedback, 10
         )
         self._pub_odom = self.create_publisher(Odometry, "/odom_raw", 10)
+        self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         # デッドレコニング状態
         self._x = 0.0
@@ -91,6 +94,7 @@ class OdometryNode(Node):
         stamp = now.to_msg()
 
         self._publish_odom(stamp, vx, vy, omega, qz, qw)
+        self._publish_tf(stamp, qz, qw)
 
     def _publish_odom(
         self,
@@ -133,6 +137,18 @@ class OdometryNode(Node):
         odom.twist.covariance[35] = 0.1   # omega [rad^2/s^2]（同上）
 
         self._pub_odom.publish(odom)
+
+    def _publish_tf(self, stamp, qz: float, qw: float) -> None:
+        t = TransformStamped()
+        t.header.stamp = stamp
+        t.header.frame_id = "odom"
+        t.child_frame_id = "base_link"
+        t.transform.translation.x = self._x
+        t.transform.translation.y = self._y
+        t.transform.translation.z = 0.0
+        t.transform.rotation.z = qz
+        t.transform.rotation.w = qw
+        self._tf_broadcaster.sendTransform(t)
 
 
 def main(args=None):

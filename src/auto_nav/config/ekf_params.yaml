@@ -1,6 +1,6 @@
 ekf_filter_node:
   ros__parameters:
-    frequency: 20.0
+    frequency: 10.0
     sensor_timeout: 0.1
     two_d_mode: true  # z/roll/pitch を無視
 
@@ -8,14 +8,14 @@ ekf_filter_node:
     odom_frame: odom
     base_link_frame: base_link
     world_frame: odom
-    publish_tf: true  # EKF が TF(odom→base_link) を配信
+    publish_tf: false  # TF は odometry_node が 20Hz で配信（EKF タイムスタンプ遅延回避）
 
     # エンコーダオドメトリ: 並進速度のみ使用（vyaw はホイールスリップで不正確なため無効）
     odom0: /odom_raw
     odom0_config: [false, false, false,   # x, y, z（pose は EKF が積分するため不使用）
                    false, false, false,   # roll, pitch, yaw
                    true,  true,  false,   # vx, vy, vz
-                   false, false, false,   # vroll, vpitch, vyaw（omega）← 無効化
+                   false, false, true,    # vroll, vpitch, vyaw（omega）← wheel で IMU を補完
                    false, false, false]   # ax, ay, az
     odom0_queue_size: 5
     odom0_differential: false
@@ -31,18 +31,6 @@ ekf_filter_node:
     imu0_queue_size: 5
     imu0_differential: false
     imu0_remove_gravitational_acceleration: false
-
-    # LiDAR scan-to-scan オドメトリ: 静止時でも ±0.4 度のノイズがあり共分散が極小（2.3e-5）
-    # のため EKF が信頼しすぎて /odom yaw に ±0.75 度の揺れを生じさせていた。
-    # キャリブレーション済み IMU のみでヨー角推定する構成に切り替え。
-    odom1: /scan_odom
-    odom1_config: [false, false, false,   # x, y, z
-                   false, false, false,   # roll, pitch, yaw ← 無効化
-                   false, false, false,   # vx, vy, vz
-                   false, false, false,   # vroll, vpitch, vyaw
-                   false, false, false]   # ax, ay, az
-    odom1_queue_size: 5
-    odom1_differential: true
 
     # プロセスノイズ（15x15 対角行列、row-major 225要素）
     # 主要値: x=0.05, y=0.05, yaw=0.08, vx=0.025, vy=0.025, vyaw=0.02

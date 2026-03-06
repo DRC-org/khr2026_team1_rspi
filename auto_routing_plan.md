@@ -62,7 +62,7 @@
 | 5 | 自律走行ノード | ✅ 完了 | `routing_node.py` | 2026-02-27 |
 | 6 | Nav2 ナビゲーション | ✅ 完了 | `nav2_params.yaml` | 2026-02-25/27 |
 | 7 | ローンチファイル整備 | ✅ 完了 | `mapping_launch.py`, `auto_nav_launch.py` | 2026-02-21/25 |
-| 8 | Web コントロール | ❌ 未実装 | `web_control/` パッケージ（新規） | — |
+| 8 | Web コントロール | ✅ 完了 | `web_control/` パッケージ | 2026-03-02 |
 | 9 | 競技対応機能 | ✅ 完了 | `routing_node.py` | 2026-03-02 |
 | 10 | 壁基準 WP 自動生成 | ✅ 完了 | `generate_waypoints.py` | 2026-03-01 |
 
@@ -427,6 +427,46 @@ ros2 topic pub /bluetooth_rx std_msgs/String '{data: "{\"type\": \"set_court\", 
 
 ---
 
+### フェーズ 11: エラーアラートとシーケンス途中再開 ✅ 完了（2026-03-04）
+
+#### 「続行不可能」の定義
+
+`nav_status: "error"` 受信時（Nav2 が `STATUS_SUCCEEDED` / `STATUS_CANCELED` 以外を返した場合）。auto sequence 中・単発 nav_goal どちらの失敗でも点滅する。
+
+#### rspi 側 `routing_node.py`
+
+- `start_auto` コマンドに `from_index` フィールドを追加（省略時 = 0）
+- `from_index > 0` の場合: `_relocate_and_start()` を別スレッドで起動
+  1. 指定ウェイポイント座標を `/initialpose` に publish（slam_toolbox の再ローカライズ起点を更新）
+  2. 3 秒カウントダウン（1 秒ごとに `nav_status: "relocating"` を送信）
+  3. カウントダウン完了後にナビゲーション開始
+- `navigating` / `arrived` / `error` メッセージに `seq_index` / `seq_total` を追加
+- auto sequence 中の `arrived`（on_arrive 完了後）も `bluetooth_tx` に送信するよう変更
+
+#### bt_controller 側
+
+- `NavStatus` に `'RELOCATING'` を追加
+- `isAlertFlashing`: error 受信で true → resume/stop/manual で false
+- `failedSeqIndex`: エラーが発生したシーケンスインデックスを保持
+- `relocatingCountdown`: カウントダウン残り秒数
+- `sendStartAutoFrom(fromIndex)`: `{"type": "start_auto", "from_index": N}` を送信
+- 点滅オーバーレイ: `fixed inset-0 z-40 pointer-events-none`、赤 ↔ 白を 500ms 間隔で切り替え
+- シーケンスリスト: 各ウェイポイント行に「ここから」ボタン。失敗行はオレンジ強調・完了行は取り消し線
+- `from_index > 0` 時: 「ロボットを waypoint_N の位置に置きましたか？」確認ダイアログを表示
+
+#### 競技時のリトライフロー
+
+```
+① エラー発生 → 画面が赤白点滅（point-events-none なのでボタン操作は継続可）
+② オペレーター: 「停止」ボタン → 手動でロボットを対象ウェイポイント位置に移動
+③ シーケンスリストで失敗行（オレンジ）の「ここから」ボタンを押す
+④ 確認ダイアログ → OK
+⑤ rspi が /initialpose を publish → 3 秒カウントダウン（UI に残り秒表示）
+⑥ ナビゲーション再開（点滅も停止）
+```
+
+---
+
 ### フェーズ 10: 壁基準ウェイポイント生成 ✅ 完了（2026-03-01）
 
 マッピング後にスクリプトで `waypoints_relative.yaml`（壁からの相対距離定義）を
@@ -650,6 +690,37 @@ sudo apt install \
   - 正: `(-x, y, π-θ)` ← 南北線（縦線）対称
   - フィールドは赤（左）・青（右）コートが横並び、北南線で線対称。X軸反転が正しい
   - θ 変換: 縦線反転では `π - θ`（東向き→西向き、北向き→北向きのまま）
+
+### 2026-03-05
+
+- **直進蛇行・角度ずれ修正**: HeadingPID の kp が度単位 error に rad/s スケールで掛かる問題を修正
+  - 根本原因: `heading_pid.py` は error を度単位で計算するが、output を rad/s として IK に渡すため
+    kp=1.0 は実効的に 57 倍の大きさで動作し、1° ドリフト → ~1548 RPM の過剰補正
+  - **Fix 1** (`cmd_vel_bridge_node.py` L45): `kp=1.0, kd=0.05` → `kp=0.02, kd=0.001`
+    1° error → 0.02 rad/s → ~31 RPM（全速の 1.5%）と適正化
+  - **Fix 2** (`cmd_vel_bridge_node.py` L140): `OMEGA_THRESHOLD=0.05` → `0.02` rad/s
+    Nav2 のゆっくりしたカーブ中も PID を無効化しやすくする
+  - **Fix 3** (`imu_publisher_node.py`): gz 符号診断ログを追加
+    回転中 (|omega_enc| > 0.05) に `ratio=gz/omega_enc` を DEBUG 出力
+    ratio≈+1.0 → 正常、ratio≈-1.0 → gz 反転が必要
+
+  確認コマンド:
+  ```bash
+  # yaw 安定確認（直進中に値が跳ねないこと）
+  ros2 topic echo /odom --field pose.pose.orientation
+
+  # gz 符号診断（旋回しながら確認）
+  ros2 run auto_nav imu_publisher_node --ros-args --log-level debug
+  ```
+
+### 2026-03-04
+
+- **フェーズ 11**: エラーアラートとシーケンス途中再開を実装
+  - `routing_node.py`: `start_auto` に `from_index` オプション追加、`_relocate_and_start()` スレッドで initialpose publish + 3 秒カウントダウン後にナビ開始、navigating/arrived/error メッセージに `seq_index`/`seq_total` 追加、auto seq 中の `arrived` メッセージを送信するよう変更
+  - `useAutoNav.ts`: `isAlertFlashing`/`failedSeqIndex`/`relocatingCountdown` 状態追加、`sendStartAutoFrom(fromIndex)` 追加、`RELOCATING` ステータス追加
+  - `AutoNav/index.tsx`: 赤白交互点滅オーバーレイ（error 時）、シーケンスリストに「ここから」ボタン、リローカライズカウントダウン表示、from_index > 0 の確認ダイアログ追加
+
+---
 
 ### 2026-03-02
 - **フェーズ 9**: routing_node.py に on_arrive シーケンス・start_auto/stop_auto・set_court・コート座標変換を追加

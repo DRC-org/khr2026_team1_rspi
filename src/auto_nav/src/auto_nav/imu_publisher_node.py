@@ -83,6 +83,15 @@ class ImuPublisherNode(Node):
             # キャリブ完了まで IMU を配信しない（EKF は /odom_raw のみで動作）
             return
 
+        # gz 符号診断: ratio≈+1.0 なら正常、≈-1.0 なら gz を反転する必要あり
+        omega_enc = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)
+        gz_corrected = gz_raw - self._gz_bias
+        if abs(omega_enc) > 0.05:
+            self.get_logger().debug(
+                f"gz={gz_corrected:.4f} rad/s  omega_enc={omega_enc:.4f} rad/s  "
+                f"ratio={gz_corrected/omega_enc:.2f}"
+            )
+
         imu_msg = Imu()
         imu_msg.header.stamp = self.get_clock().now().to_msg()
         imu_msg.header.frame_id = "base_link"

@@ -1,22 +1,22 @@
-# 自動生成: generate_waypoints.py により 2026-03-02 18:30:32 に生成
-# 入力: field.pgm (検出壁: north=3.0230, south=-0.3270, west=-6.9290, east=0.2710)
+# 自動生成: generate_waypoints.py により 2026-03-05 12:30:42 に生成
+# 入力: field.pgm (検出壁: north=3.1560, south=0.7560, west=-6.8980, east=0.2520)
 auto_sequence:
 - waypoint_1
 - waypoint_2
 - waypoint_3
 waypoints:
   waypoint_1:
-    x: -5.929
-    y: 0.173
+    x: -5.898
+    y: 1.256
     theta: 0.0
     on_arrive: []
   waypoint_2:
-    x: -5.929
-    y: 2.523
+    x: -5.898
+    y: 2.656
     theta: 0.0
     on_arrive: []
   waypoint_3:
-    x: -0.729
-    y: 0.173
+    x: -0.748
+    y: 1.256
     theta: 0.0
     on_arrive: []

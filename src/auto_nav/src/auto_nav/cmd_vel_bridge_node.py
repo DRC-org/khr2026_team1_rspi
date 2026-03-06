@@ -42,7 +42,7 @@ class CmdVelBridgeNode(Node):
         super().__init__("cmd_vel_bridge_node")
 
         self._mode = "manual"
-        self._heading_pid = HeadingPID(kp=1.0, ki=0.0, kd=0.05)
+        self._heading_pid = HeadingPID(kp=0.02, ki=0.0, kd=0.001)
         self._current_yaw: float | None = None
         self._target_yaw: float | None = None
         self._last_twist: Twist | None = None
@@ -137,7 +137,7 @@ class CmdVelBridgeNode(Node):
             rpms = [r * scale for r in rpms]
 
         # ヨー角維持 PID（直進中のドリフト抑制）
-        OMEGA_THRESHOLD = 0.05   # rad/s: これ以下を「直進」とみなす
+        OMEGA_THRESHOLD = 0.02   # rad/s: Nav2 のゆっくりしたカーブ中も PID を無効化
         VELOCITY_THRESHOLD = 0.01  # m/s: これ以下を「停止」とみなす
 
         if self._current_yaw is not None:
