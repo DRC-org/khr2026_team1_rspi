@@ -12,8 +12,7 @@
   - bt_communication       (Bluetooth GATT サーバー)
   - auto_nav odometry      (wheel_feedback → /odom_raw, エンコーダのみ)
   - auto_nav imu_publisher (wheel_feedback → /imu, gyro/accel)
-  - scan_odometry_node     (/scan_filtered → /scan_odom, LiDAR scan-to-scan)
-  - ekf_filter_node        (/odom_raw + /imu + /scan_odom → /odom + TF(odom→base_link))
+  - ekf_filter_node        (/odom_raw + /imu → /odom + TF(odom→base_link))
   - auto_nav cmd_vel_bridge(/cmd_vel → wheel_control, auto モード時のみ有効)
 
 使い方:
@@ -161,35 +160,6 @@ def generate_launch_description():
         ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
-    # LiDAR scan-to-scan オドメトリ（icp_odometry, rtabmap_odom）
-    # /scan_filtered からスキャンマッチングで絶対姿勢を推定し /scan_odom に配信する。
-    # EKF が yaw を差分モードで取り込み、エンコーダ/IMU と融合する。
-    scan_odometry_node = Node(
-        package="rtabmap_odom",
-        executable="icp_odometry",
-        name="scan_odometry_node",
-        output="screen",
-        emulate_tty=True,
-        parameters=[{
-            "frame_id": "base_link",
-            "odom_frame_id": "odom",
-            "subscribe_scan": True,
-            "publish_tf": False,           # TF は EKF が担当
-            "Odom/Strategy": "0",          # Frame-to-Frame（scan-to-scan）
-            "Odom/GuessMotion": "true",    # 前フレームの速度を初期推定に利用
-            "Icp/PointToPlane": "false",   # 2D スキャン（ノーマルなし）
-            "Icp/MaxCorrespondenceDistance": "0.5",
-            "Icp/Iterations": "10",
-            "Icp/MaxTranslation": "1.0",
-            "Icp/MaxRotation": "0.785",    # 45°/update を上限
-        }],
-        remappings=[
-            ("scan", "/scan_filtered"),
-            ("odom", "/scan_odom"),
-        ],
-        ros_arguments=["--log-level", "warn"],
-    )
-
     ekf_node = Node(
         package="robot_localization",
         executable="ekf_node",
@@ -239,6 +209,16 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
+    # slam_toolbox の tf2_ros::MessageFilter が TF 通知で再チェックしない問題への対策
+    # スキャンのタイムスタンプを 100ms 過去にずらして、初回チェックで TF が見つかるようにする
+    scan_relay_node = Node(
+        package="auto_nav",
+        executable="launch_scan_relay.py",
+        name="scan_relay_node",
+        output="screen",
+        emulate_tty=True,
+    )
+
     slam_toolbox_node = Node(
         package="slam_toolbox",
         executable="async_slam_toolbox_node",
@@ -279,9 +259,9 @@ def generate_launch_description():
             ydlidar_launch,
             static_tf_node,
             laser_filter_node,
+            scan_relay_node,
             odometry_node,
             imu_publisher_node,
-            scan_odometry_node,
             ekf_node,
             slam_toolbox_node,
             slam_lifecycle,

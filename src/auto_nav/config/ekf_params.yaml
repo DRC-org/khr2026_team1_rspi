@@ -1,6 +1,6 @@
 ekf_filter_node:
   ros__parameters:
-    frequency: 10.0
+    frequency: 20.0
     sensor_timeout: 0.1
     two_d_mode: true  # z/roll/pitch を無視
 
@@ -8,7 +8,7 @@ ekf_filter_node:
     odom_frame: odom
     base_link_frame: base_link
     world_frame: odom
-    publish_tf: false  # TF は odometry_node が 20Hz で配信（EKF タイムスタンプ遅延回避）
+    publish_tf: true
 
     # エンコーダオドメトリ: 並進速度のみ使用（vyaw はホイールスリップで不正確なため無効）
     odom0: /odom_raw

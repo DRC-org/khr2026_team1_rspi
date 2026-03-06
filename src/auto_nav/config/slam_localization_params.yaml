@@ -13,7 +13,7 @@ slam_toolbox:
     odom_frame: odom
     map_frame: map
     base_frame: base_link        # 当機は base_link を使用
-    scan_topic: /scan_filtered   # タイヤ映り込みを除去したスキャン
+    scan_topic: /scan_delayed     # scan_relay_node がタイムスタンプを 100ms 過去にずらして配信
 
     mode: localization
     map_file_name: ""            # auto_nav_launch.py の引数で上書きする

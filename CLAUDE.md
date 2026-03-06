@@ -183,8 +183,8 @@ ros2 run nav2_map_server map_saver_cli -f /home/pi/maps/field \
 
 ```
 map
- └── odom              ← slam_toolbox が配信（フェーズ3以降）
-      └── base_link    ← OdometryNode が配信
+ └── odom              ← slam_toolbox が配信
+      └── base_link    ← ekf_filter_node が配信（エンコーダ + IMU 融合）
            └── laser_frame  ← static_tf で定義（LiDAR 取付位置）
 ```
 

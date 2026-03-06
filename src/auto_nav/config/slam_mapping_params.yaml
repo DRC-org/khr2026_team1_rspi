@@ -13,7 +13,7 @@ slam_toolbox:
     odom_frame: odom
     map_frame: map
     base_frame: base_link        # 当機は base_link を使用
-    scan_topic: /scan_filtered   # タイヤ映り込みを除去したスキャン
+    scan_topic: /scan_delayed     # scan_relay_node がタイムスタンプを 100ms 過去にずらして配信
 
     mode: mapping
     use_map_saver: false  # nav2_map_saver 未インストールのため false。保存は serialize_map を使う
@@ -24,8 +24,8 @@ slam_toolbox:
     map_update_interval: 1.0     # 1秒ごとに地図更新（リアルタイム確認用）
     resolution: 0.05             # 5cm/cell
     max_laser_range: 10.0        # YDLiDAR の最大レンジ 12m に対して余裕を持たせる
-    minimum_time_interval: 0.2     # 5スキャン/秒処理（旧0.5: 急回転時にスキャン見逃し対策）
-    transform_timeout: 0.2
+    minimum_time_interval: 0.1     # 10スキャン/秒処理（急回転追従）
+    transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
     enable_interactive_mode: false  # ヘッドレス RPi では不要・CPU 節約のため false
@@ -34,7 +34,7 @@ slam_toolbox:
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_travel_distance: 0.3   # 0.3m 走るごとにスキャンを処理（狭いフィールド対策）
-    minimum_travel_heading: 0.15   # 8°回転ごとに処理（旧0.3: 急回転の追跡精度を向上）
+    minimum_travel_heading: 0.1    # ~6°回転ごとに処理（旋回追従精度向上）
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
     # 対角壁での重複描画防止: 低スコアフレームを棄却（0.25〜0.45 で調整）
@@ -62,7 +62,7 @@ slam_toolbox:
     distance_variance_penalty: 0.5
     angle_variance_penalty: 1.0
     fine_search_angle_offset: 0.00349
-    coarse_search_angle_offset: 0.5   # 29°まで探索（旧0.349: オドメトリ誤差耐性向上）
+    coarse_search_angle_offset: 0.7   # 40°まで探索（旋回中のオドメトリ yaw 誤差に対応）
     coarse_angle_resolution: 0.0349
     minimum_angle_penalty: 0.9
     minimum_distance_penalty: 0.5
