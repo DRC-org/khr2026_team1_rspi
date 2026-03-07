@@ -239,23 +239,51 @@ def generate_launch_description():
         ],
     )
 
-    # nav2_bringup/navigation_launch.py: controller_server / planner_server /
-    # behavior_server / bt_navigator + lifecycle_manager_navigation を起動する。
-    # bringup_launch.py（map_server + AMCL 含む）は使わない。
-    # /map は slam_toolbox が配信済みのため不要。
-    nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("nav2_bringup"),
-                "launch",
-                "navigation_launch.py",
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": "false",
-            "params_file": nav2_params,
-            "autostart": "true",
-        }.items(),
+    # Nav2 必要ノードのみを個別起動（navigation_launch.py は不要ノードを多数含むため使わない）
+    # smoother_server / route_server / waypoint_follower / docking_server は競技不使用のため除外
+    # velocity_smoother / collision_monitor も除外し、controller_server が /cmd_vel へ直接出力
+    _nav2_remaps = [("/tf", "tf"), ("/tf_static", "tf_static")]
+
+    controller_server_node = Node(
+        package="nav2_controller",
+        executable="controller_server",
+        output="screen",
+        parameters=[nav2_params],
+        remappings=_nav2_remaps,
+        # cmd_vel リマップなし → /cmd_vel へ直接出力
+    )
+
+    planner_server_node = Node(
+        package="nav2_planner",
+        executable="planner_server",
+        output="screen",
+        parameters=[nav2_params],
+        remappings=_nav2_remaps,
+    )
+
+    behavior_server_node = Node(
+        package="nav2_behaviors",
+        executable="behavior_server",
+        output="screen",
+        parameters=[nav2_params],
+        remappings=_nav2_remaps,
+        # cmd_vel リマップなし → /cmd_vel へ直接出力
+    )
+
+    bt_navigator_node = Node(
+        package="nav2_bt_navigator",
+        executable="bt_navigator",
+        output="screen",
+        parameters=[nav2_params],
+        remappings=_nav2_remaps,
+    )
+
+    lifecycle_manager_node = Node(
+        package="nav2_lifecycle_manager",
+        executable="lifecycle_manager",
+        name="lifecycle_manager_navigation",
+        output="screen",
+        parameters=[nav2_params],
     )
 
     routing_node = Node(
@@ -314,7 +342,11 @@ def generate_launch_description():
             ekf_node,
             slam_toolbox_node,
             slam_lifecycle,
-            nav2_launch,
+            controller_server_node,
+            planner_server_node,
+            behavior_server_node,
+            bt_navigator_node,
+            lifecycle_manager_node,
             routing_node,
             robot_control_node,
             bt_communication_node,

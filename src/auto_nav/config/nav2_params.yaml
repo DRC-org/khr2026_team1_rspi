@@ -26,7 +26,7 @@ lifecycle_manager_navigation:
 # =============================================================================
 controller_server:
   ros__parameters:
-    controller_frequency: 7.0
+    controller_frequency: 5.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001  # メカナム: Y 方向停止判定を有効化
     min_theta_velocity_threshold: 0.001
@@ -38,7 +38,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
-      movement_time_allowance: 10.0
+      movement_time_allowance: 15.0
 
     # 目標到達判定: ±8cm 以内かつ向き ±6° 以内
     general_goal_checker:
@@ -71,10 +71,10 @@ controller_server:
       decel_lim_theta: -3.2
 
       # --- サンプリング数（Raspberry Pi 負荷軽減のため削減）---
-      vx_samples: 10
+      vx_samples: 7
       # メカナム: Y 方向もサンプリングして全方向軌跡を評価
-      vy_samples: 5
-      vtheta_samples: 10
+      vy_samples: 3
+      vtheta_samples: 7
 
       # --- 軌跡シミュレーション ---
       sim_time: 1.2

@@ -34,7 +34,7 @@ class ScanRelayNode(Node):
             LaserScan, "/scan_filtered", self._on_scan, reliable_qos
         )
         self._buffer: deque[tuple[float, LaserScan]] = deque()
-        self._timer = self.create_timer(0.01, self._flush)
+        self._timer = self.create_timer(0.033, self._flush)
 
     def _on_scan(self, msg: LaserScan) -> None:
         self._buffer.append((time.monotonic(), msg))
