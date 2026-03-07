@@ -227,7 +227,7 @@ v_rr = -Vx - Vy - G*ω
 **前進運動学**（`odometry_node.py`）:
 ```
 Vx    = ( v_fl - v_fr + v_rl - v_rr) / 4
-Vy    = ( v_fl + v_fr - v_rl - v_rr) / 4
+Vy    = -( v_fl + v_fr - v_rl - v_rr) / 4
 omega = -(v_fl + v_fr + v_rl + v_rr) / (4 * G)
 ```
 

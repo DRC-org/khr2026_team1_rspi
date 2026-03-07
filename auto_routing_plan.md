@@ -266,7 +266,7 @@ ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field transport:=udp4
 ```
 
 **注意:** `base_link → laser_frame` の static_tf は名前付き引数で設定。
-LiDAR 取付向き: `--yaw 1.5708`（0度方向がロボット左向き）、`--pitch 3.14159`（上下反転補正）。z=0.15m は仮設定のため実機実測で調整すること。
+LiDAR 取付向き: `--yaw 1.5708`（0度方向がロボット左向き）、`--pitch 0.0 --roll 0.0`（上下反転取付だが pitch=π は左右鏡像を生じるため roll も 0 が正しい）。z=0.15m は仮設定のため実機実測で調整すること。
 
 ---
 
@@ -601,7 +601,7 @@ waypoints:
 map
  └── odom                      ← slam_toolbox が配信（~9.5Hz）
       └── base_link            ← ekf_filter_node が配信（robot_localization、~17Hz）
-           └── laser_frame     ← static_tf（yaw=1.5708, pitch=3.14159, z=0.15m）
+           └── laser_frame     ← static_tf（yaw=1.5708, pitch=0.0, roll=0.0, z=0.15m）
 ```
 
 `odometry_node` は `/odom_raw` のみ配信。`odom→base_link` TF は EKF が担当。
@@ -690,6 +690,26 @@ sudo apt install \
   - 正: `(-x, y, π-θ)` ← 南北線（縦線）対称
   - フィールドは赤（左）・青（右）コートが横並び、北南線で線対称。X軸反転が正しい
   - θ 変換: 縦線反転では `π - θ`（東向き→西向き、北向き→北向きのまま）
+
+### 2026-03-07
+
+- **点群回転問題の修正（RViz 上で壁に点群が固定されない問題）**
+  - **LiDAR TF 修正** (`mapping_launch.py`, `auto_nav_launch.py`):
+    - 旧: `--yaw 1.5708 --pitch 3.14159 --roll 0.0`
+    - 新: `--yaw 1.5708 --pitch 0.0 --roll 0.0`
+    - pitch=π（Y軸180°回転）は X軸を反転させるため、2D スキャン上で左右鏡像を引き起こす。
+      上下反転取付でも 2D スキャンの正しい向きには yaw=-π/2 or π/2 だけで十分。
+      試行錯誤の結果 `yaw=π/2, pitch=0, roll=0` が前後・左右ともに正しいことを実機で確認。
+  - **odometry_node.py の vy 符号修正**:
+    - 旧: `vy = (v_fl + v_fr - v_rl - v_rr) / 4.0`
+    - 新: `vy = -(v_fl + v_fr - v_rl - v_rr) / 4.0`
+    - 実機確認: 右移動時に `/odom_raw` の vy が正（左方向）になっていたため符号反転。
+      LiDAR TF が pitch=π で誤っていた間はマップも odom も両方ずれていたため見かけ上動作していた。
+  - **確認手順**:
+    1. `ros2 topic echo /imu --field angular_velocity.z` + 左回転 → 正の値（✅ 正常）
+    2. `ros2 topic echo /odom_raw --field twist.twist.angular.z` + 左回転 → 正の値（✅ 正常）
+    3. `ros2 topic echo /odom --field twist.twist.angular.z` + 左回転 → 正の値（✅ 正常）
+    4. RViz (Fixed Frame=odom) でロボット旋回 → 点群が壁に固定される（✅ 修正確認）
 
 ### 2026-03-05
 

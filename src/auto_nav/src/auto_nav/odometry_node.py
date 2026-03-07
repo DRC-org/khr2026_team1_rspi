@@ -30,7 +30,7 @@ class OdometryNode(Node):
         v_rr = -Vx - Vy - G*ω
 
         → Vx    = ( v_fl - v_fr + v_rl - v_rr) / 4
-           Vy    = ( v_fl + v_fr - v_rl - v_rr) / 4
+           Vy    = -( v_fl + v_fr - v_rl - v_rr) / 4
            omega = -(v_fl + v_fr + v_rl + v_rr) / (4 * G)
     """
 
@@ -74,7 +74,7 @@ class OdometryNode(Node):
 
         # 前進運動学: 車輪速度 → ロボット機体速度
         vx = (v_fl - v_fr + v_rl - v_rr) / 4.0  # 前後速度 [m/s]
-        vy = (v_fl + v_fr - v_rl - v_rr) / 4.0  # 左右速度 [m/s]（左が正）
+        vy = -(v_fl + v_fr - v_rl - v_rr) / 4.0  # 左右速度 [m/s]（左が正）
         omega = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # 角速度 [rad/s]
 
         # デッドレコニング積分（オイラー法）
