@@ -13,6 +13,7 @@ uint8 STATE_CLOSE=1
 uint8 STATE_STOPPED=2
 uint8 STATE_OPEN_DONE=3
 uint8 STATE_CLOSE_DONE=4
+uint8 STATE_GRIP_FAIL=5
 
 uint8 pos
 uint8 state
