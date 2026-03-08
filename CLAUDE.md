@@ -267,12 +267,7 @@ sudo apt install \
 ### 起動
 
 ```bash
-# 前方検出（デフォルト）
 ros2 run auto_nav launch_yagura_position.py
-
-# 右側検出
-ros2 run auto_nav launch_yagura_position.py --ros-args \
-  -p heading_center_deg:=-90.0 -p heading_half_deg:=60.0
 
 # 結果確認
 ros2 topic echo /yagura_position
@@ -289,10 +284,8 @@ ros2 topic echo /yagura_position
 
 | パラメータ | デフォルト | 説明 |
 |---|---|---|
-| `heading_center_deg` | 0 | 検出方位中心（0=前, -90=右, 90=左） |
-| `heading_half_deg` | 90 | 検出方位の半開き角 |
 | `max_range` | 2.5 m | 最大検出距離 |
-| `radius_tolerance` | 0.025 m | 半径の許容誤差 |
+| `radius_tolerance` | 0.015 m | 半径の許容誤差（±15mm） |
 
 ### 前提
 

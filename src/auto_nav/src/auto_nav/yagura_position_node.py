@@ -1,16 +1,14 @@
 """
-yagura_position_node — 櫓（Phi114mm）2D座標検出
+yagura_position_node — 右側の櫓（Phi114mm）2D座標検出
 
-/scan を購読し、Kasa最小二乗円フィッティングで
-Phi114mm の円柱位置を base_link 座標系の PointStamped で配信する。
+/scan を購読し、ロボット右側（base_link y-）に存在する
+Phi114mm 円柱の中心位置を base_link 座標系の PointStamped で配信する。
 
 パラメータ:
-  heading_center_deg  検出方位の中心 (0=前, -90=右, 90=左)
-  heading_half_deg    検出方位の半開き角 (デフォルト 90 = 前方半円)
-  cylinder_radius     期待半径 [m] (デフォルト 0.057 = Phi114mm/2)
-  radius_tolerance    半径の許容誤差 [m] (デフォルト 0.025)
-  min_range           最小検出距離 [m] (デフォルト 0.05)
-  max_range           最大検出距離 [m] (デフォルト 2.5)
+  cylinder_radius   期待半径 [m] (デフォルト 0.057 = Phi114mm/2)
+  radius_tolerance  半径の許容誤差 [m] (デフォルト 0.015 = ±15mm)
+  min_range         最小検出距離 [m] (デフォルト 0.05)
+  max_range         最大検出距離 [m] (デフォルト 2.5)
 """
 
 import math
@@ -27,21 +25,22 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 import tf2_ros
 
+# 右側検出範囲: base_link y- 方向を中心に ±60 度
+_RIGHT_CENTER_RAD = math.radians(-90.0)
+_RIGHT_HALF_RAD = math.radians(60.0)
+
 
 class YaguraPositionNode(Node):
     def __init__(self) -> None:
         super().__init__("yagura_position")
 
         self.declare_parameter("cylinder_radius", 0.057)   # m (Phi114mm / 2)
-        self.declare_parameter("radius_tolerance", 0.025)  # m
+        self.declare_parameter("radius_tolerance", 0.015)  # m
         self.declare_parameter("min_range", 0.05)          # m
         self.declare_parameter("max_range", 2.5)           # m
         self.declare_parameter("cluster_gap", 0.10)        # m
         self.declare_parameter("min_cluster_points", 3)
         self.declare_parameter("target_frame", "base_link")
-        # 検出方位 (base_link 基準, 0=前方, -90=右, 90=左, 180=後方)
-        self.declare_parameter("heading_center_deg", 0.0)
-        self.declare_parameter("heading_half_deg", 90.0)
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
@@ -52,7 +51,7 @@ class YaguraPositionNode(Node):
         self._pub_pos = self.create_publisher(PointStamped, "yagura_position", 10)
         self._pub_marker = self.create_publisher(MarkerArray, "yagura_markers", 10)
 
-        self.get_logger().info("YaguraPosition initialized (Phi114mm)")
+        self.get_logger().info("YaguraPosition initialized (Phi114mm, right side)")
 
     def _on_scan(self, msg: LaserScan) -> None:
         r_target = self.get_parameter("cylinder_radius").value
@@ -62,8 +61,6 @@ class YaguraPositionNode(Node):
         gap = self.get_parameter("cluster_gap").value
         min_pts = int(self.get_parameter("min_cluster_points").value)
         target_frame = self.get_parameter("target_frame").value
-        center_rad = math.radians(self.get_parameter("heading_center_deg").value)
-        half_rad = math.radians(self.get_parameter("heading_half_deg").value)
 
         try:
             tf = self._tf_buffer.lookup_transform(
@@ -87,6 +84,7 @@ class YaguraPositionNode(Node):
         tx = tf.transform.translation.x
         ty = tf.transform.translation.y
 
+        # 右側（base_link y-）±60 度の範囲のみ残す
         points_base = []
         for i, r in enumerate(msg.ranges):
             if not (min_r <= r <= max_r) or not math.isfinite(r):
@@ -97,8 +95,11 @@ class YaguraPositionNode(Node):
             xb = cos_y * xl - sin_y * yl + tx
             yb = sin_y * xl + cos_y * yl + ty
             heading = math.atan2(yb, xb)
-            diff = abs(math.atan2(math.sin(heading - center_rad), math.cos(heading - center_rad)))
-            if diff <= half_rad:
+            diff = abs(math.atan2(
+                math.sin(heading - _RIGHT_CENTER_RAD),
+                math.cos(heading - _RIGHT_CENTER_RAD),
+            ))
+            if diff <= _RIGHT_HALF_RAD:
                 points_base.append((xb, yb))
 
         if len(points_base) < min_pts:
@@ -106,6 +107,7 @@ class YaguraPositionNode(Node):
 
         clusters = _cluster_scan_points(points_base, gap)
 
+        # 各クラスタで円フィッティング、半径が Phi114mm に最も近い候補を採用
         candidates = []
         for cl in clusters:
             if len(cl) < min_pts:
@@ -114,14 +116,13 @@ class YaguraPositionNode(Node):
             if cx is None:
                 continue
             if abs(radius - r_target) <= r_tol:
-                dist = math.hypot(cx, cy)
                 r_err = abs(radius - r_target)
+                dist = math.hypot(cx, cy)
                 candidates.append((r_err, dist, cx, cy, radius))
 
         if not candidates:
             return
 
-        # 半径誤差が最小の候補を採用（同誤差の場合は近い方）
         candidates.sort()
         _, _, cx, cy, _ = candidates[0]
 
@@ -201,12 +202,10 @@ def _fit_circle(pts):
     suv = float((u * v).sum())
 
     A = np.array([[suu, suv], [suv, svv]])
-    b = np.array(
-        [
-            0.5 * float((u**3 + u * v**2).sum()),
-            0.5 * float((v**3 + v * u**2).sum()),
-        ]
-    )
+    b = np.array([
+        0.5 * float((u**3 + u * v**2).sum()),
+        0.5 * float((v**3 + v * u**2).sum()),
+    ])
 
     try:
         uc, vc = np.linalg.solve(A, b)
