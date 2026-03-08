@@ -1,19 +1,16 @@
 """
-近距離の円柱（Phi114mm）位置検出ノード
+yagura_position_node — 櫓（Phi114mm）2D座標検出
 
-/scan (LaserScan) を購読し、base_link 座標系での円柱中心位置を
-cylinder_position (PointStamped) として配信する。
+/scan を購読し、Kasa最小二乗円フィッティングで
+Phi114mm の円柱位置を base_link 座標系の PointStamped で配信する。
 
-アルゴリズム:
-  1. 各スキャン点を laser_frame -> base_link へ座標変換
-  2. 指定方位（heading_center_deg +- heading_half_deg）かつ指定距離範囲の点のみ残す
-  3. 隣接点間の距離でクラスタリング（スキャン角度順）
-  4. 各クラスタに対して Kasa 代数法で最小二乗円フィッティング
-  5. 半径が期待値（cylinder_radius +- radius_tolerance）に合うクラスタを採用
-  6. 最近傍の候補を cylinder_position として発行
-
-heading_center_deg: 検出方位の中心 (base_link 基準, 0=前, -90=右, 90=左, 180=後)
-heading_half_deg  : 検出方位の半開き角 (例: 90 で +-90 度の半円)
+パラメータ:
+  heading_center_deg  検出方位の中心 (0=前, -90=右, 90=左)
+  heading_half_deg    検出方位の半開き角 (デフォルト 90 = 前方半円)
+  cylinder_radius     期待半径 [m] (デフォルト 0.057 = Phi114mm/2)
+  radius_tolerance    半径の許容誤差 [m] (デフォルト 0.025)
+  min_range           最小検出距離 [m] (デフォルト 0.05)
+  max_range           最大検出距離 [m] (デフォルト 2.5)
 """
 
 import math
@@ -23,6 +20,7 @@ import rclpy
 import rclpy.time
 from geometry_msgs.msg import PointStamped
 from rclpy.node import Node
+from rclpy.qos import QoSPresetProfiles
 from sensor_msgs.msg import LaserScan
 from tf2_ros import TransformException
 from visualization_msgs.msg import Marker, MarkerArray
@@ -30,15 +28,15 @@ from visualization_msgs.msg import Marker, MarkerArray
 import tf2_ros
 
 
-class CylinderDetectorNode(Node):
+class YaguraPositionNode(Node):
     def __init__(self) -> None:
-        super().__init__("cylinder_detector")
+        super().__init__("yagura_position")
 
         self.declare_parameter("cylinder_radius", 0.057)   # m (Phi114mm / 2)
         self.declare_parameter("radius_tolerance", 0.025)  # m
         self.declare_parameter("min_range", 0.05)          # m
         self.declare_parameter("max_range", 2.5)           # m
-        self.declare_parameter("cluster_gap", 0.10)        # m (クラスタ分割閾値)
+        self.declare_parameter("cluster_gap", 0.10)        # m
         self.declare_parameter("min_cluster_points", 3)
         self.declare_parameter("target_frame", "base_link")
         # 検出方位 (base_link 基準, 0=前方, -90=右, 90=左, 180=後方)
@@ -49,12 +47,12 @@ class CylinderDetectorNode(Node):
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         self._sub = self.create_subscription(
-            LaserScan, "/scan", self._on_scan, 10
+            LaserScan, "/scan", self._on_scan, QoSPresetProfiles.SENSOR_DATA.value
         )
-        self._pub_pos = self.create_publisher(PointStamped, "cylinder_position", 10)
-        self._pub_marker = self.create_publisher(MarkerArray, "cylinder_markers", 10)
+        self._pub_pos = self.create_publisher(PointStamped, "yagura_position", 10)
+        self._pub_marker = self.create_publisher(MarkerArray, "yagura_markers", 10)
 
-        self.get_logger().info("CylinderDetector initialized (Phi114mm)")
+        self.get_logger().info("YaguraPosition initialized (Phi114mm)")
 
     def _on_scan(self, msg: LaserScan) -> None:
         r_target = self.get_parameter("cylinder_radius").value
@@ -67,7 +65,6 @@ class CylinderDetectorNode(Node):
         center_rad = math.radians(self.get_parameter("heading_center_deg").value)
         half_rad = math.radians(self.get_parameter("heading_half_deg").value)
 
-        # --- TF 取得 (laser_frame -> base_link) ---
         try:
             tf = self._tf_buffer.lookup_transform(
                 target_frame,
@@ -80,7 +77,6 @@ class CylinderDetectorNode(Node):
             )
             return
 
-        # クォータニオン -> yaw (Z 軸回転のみ想定)
         q = tf.transform.rotation
         yaw = math.atan2(
             2.0 * (q.w * q.z + q.x * q.y),
@@ -91,7 +87,6 @@ class CylinderDetectorNode(Node):
         tx = tf.transform.translation.x
         ty = tf.transform.translation.y
 
-        # --- 有効スキャン点を base_link 座標へ変換、前方のみ残す ---
         points_base = []
         for i, r in enumerate(msg.ranges):
             if not (min_r <= r <= max_r) or not math.isfinite(r):
@@ -109,10 +104,8 @@ class CylinderDetectorNode(Node):
         if len(points_base) < min_pts:
             return
 
-        # --- クラスタリング (スキャン角度順の隣接距離ベース) ---
         clusters = _cluster_scan_points(points_base, gap)
 
-        # --- 各クラスタで円フィッティング -> 候補抽出 ---
         candidates = []
         for cl in clusters:
             if len(cl) < min_pts:
@@ -122,13 +115,15 @@ class CylinderDetectorNode(Node):
                 continue
             if abs(radius - r_target) <= r_tol:
                 dist = math.hypot(cx, cy)
-                candidates.append((dist, cx, cy, radius))
+                r_err = abs(radius - r_target)
+                candidates.append((r_err, dist, cx, cy, radius))
 
         if not candidates:
             return
 
+        # 半径誤差が最小の候補を採用（同誤差の場合は近い方）
         candidates.sort()
-        _, cx, cy, _ = candidates[0]
+        _, _, cx, cy, _ = candidates[0]
 
         pt = PointStamped()
         pt.header.stamp = msg.header.stamp
@@ -139,19 +134,19 @@ class CylinderDetectorNode(Node):
         self._pub_pos.publish(pt)
 
         self.get_logger().debug(
-            "Cylinder: x=%.3f y=%.3f dist=%.3fm r_fit=%dmm (%d candidates)"
-            % (cx, cy, candidates[0][0], int(candidates[0][3] * 1000), len(candidates))
+            "Yagura: x=%.3f y=%.3f dist=%.3fm r_fit=%dmm (%d candidates)"
+            % (cx, cy, candidates[0][1], int(candidates[0][4] * 1000), len(candidates))
         )
 
         self._publish_markers(msg.header.stamp, target_frame, candidates)
 
     def _publish_markers(self, stamp, frame_id, candidates) -> None:
         arr = MarkerArray()
-        for i, (_, cx, cy, radius) in enumerate(candidates):
+        for i, (_, _, cx, cy, radius) in enumerate(candidates):
             m = Marker()
             m.header.stamp = stamp
             m.header.frame_id = frame_id
-            m.ns = "cylinder"
+            m.ns = "yagura"
             m.id = i
             m.type = Marker.CYLINDER
             m.action = Marker.ADD
@@ -169,11 +164,6 @@ class CylinderDetectorNode(Node):
             m.lifetime.sec = 1
             arr.markers.append(m)
         self._pub_marker.publish(arr)
-
-
-# ------------------------------------------------------------------
-# 純粋関数
-# ------------------------------------------------------------------
 
 
 def _cluster_scan_points(pts, gap):
@@ -194,10 +184,6 @@ def _cluster_scan_points(pts, gap):
 def _fit_circle(pts):
     """
     Kasa 代数的最小二乗法による円フィッティング。
-
-    各点 (x_i, y_i) に対して
-        x_i^2 + y_i^2 = 2a*x_i + 2b*y_i + c
-    を最小二乗で解き、中心 (a, b) と半径 r を返す。
     点数が 3 未満または行列が特異の場合は (None, None, None)。
     """
     arr = np.asarray(pts, dtype=np.float64)
@@ -233,7 +219,7 @@ def _fit_circle(pts):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = CylinderDetectorNode()
+    node = YaguraPositionNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

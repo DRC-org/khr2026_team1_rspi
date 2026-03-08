@@ -256,3 +256,44 @@ sudo apt install \
   ros-jazzy-nav2-map-server \
   ros-jazzy-laser-filters
 ```
+
+---
+
+## yagura_position_node（櫓座標検出）
+
+`/scan` から Φ114mm 円柱の base_link 2D座標を検出して配信するノード。
+`auto_nav` パッケージに含まれる。
+
+### 起動
+
+```bash
+# 前方検出（デフォルト）
+ros2 run auto_nav launch_yagura_position.py
+
+# 右側検出
+ros2 run auto_nav launch_yagura_position.py --ros-args \
+  -p heading_center_deg:=-90.0 -p heading_half_deg:=60.0
+
+# 結果確認
+ros2 topic echo /yagura_position
+```
+
+### トピック
+
+| トピック | 型 | 内容 |
+|---|---|---|
+| `yagura_position` | `geometry_msgs/PointStamped` | 櫓中心の base_link 2D座標 |
+| `yagura_markers` | `visualization_msgs/MarkerArray` | RViz 可視化 |
+
+### 主要パラメータ
+
+| パラメータ | デフォルト | 説明 |
+|---|---|---|
+| `heading_center_deg` | 0 | 検出方位中心（0=前, -90=右, 90=左） |
+| `heading_half_deg` | 90 | 検出方位の半開き角 |
+| `max_range` | 2.5 m | 最大検出距離 |
+| `radius_tolerance` | 0.025 m | 半径の許容誤差 |
+
+### 前提
+
+`auto_nav_launch.py`（または LiDAR + 静的TF）が起動していること。
