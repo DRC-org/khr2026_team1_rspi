@@ -195,8 +195,8 @@ class RoutingNode(Node):
     def _goal_response_cb(self, future) -> None:
         self._goal_handle = future.result()
         if not self._goal_handle.accepted:
-            # bt_navigator が active 状態になる前にゴールが届いた場合はリトライ
-            _MAX_RETRIES = 3
+            # bt_navigator が lifecycle active に遷移するまで時間がかかるためリトライ回数を多めに設定
+            _MAX_RETRIES = 15
             if self._state == "NAVIGATING" and self._goal_retry_count < _MAX_RETRIES:
                 self._goal_retry_count += 1
                 self.get_logger().warn(

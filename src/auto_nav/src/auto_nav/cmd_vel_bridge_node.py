@@ -32,11 +32,11 @@ class CmdVelBridgeNode(Node):
     /nav_mode が "auto" のときだけ変換・送信する。
     "manual" のときは何も送信しない（robot_control ノードが担当）。
 
-    逆運動学（m3508.py と同じ符号系）:
-        v_fl = +Vx + Vy - G*ω
-        v_fr = -Vx + Vy - G*ω
-        v_rl = +Vx - Vy - G*ω
-        v_rr = -Vx - Vy - G*ω
+    逆運動学（ROS標準座標系: Vy>0=左）:
+        v_fl = +Vx - Vy - G*ω
+        v_fr = -Vx - Vy - G*ω
+        v_rl = +Vx + Vy - G*ω
+        v_rr = -Vx + Vy - G*ω
     """
 
     def __init__(self):
@@ -119,10 +119,11 @@ class CmdVelBridgeNode(Node):
         omega = msg.angular.z  # 角速度 [rad/s]（反時計が正）
 
         # 逆運動学: ロボット速度 → 各車輪の線速度 [m/s]
-        v_fl = +vx + vy - G * omega
-        v_fr = -vx + vy - G * omega
-        v_rl = +vx - vy - G * omega
-        v_rr = -vx - vy - G * omega
+        # ROS標準座標系(Vy>0=左)のまま使用。m3508.py は内部で vy を反転しているため符号が異なる
+        v_fl = +vx - vy - G * omega
+        v_fr = -vx - vy - G * omega
+        v_rl = +vx + vy - G * omega
+        v_rr = -vx + vy - G * omega
 
         # 線速度 → RPM
         rpms = [v * MS_TO_RPM for v in (v_fl, v_fr, v_rl, v_rr)]

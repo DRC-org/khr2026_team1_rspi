@@ -74,15 +74,15 @@ controller_server:
       # 壁近傍の狭路でより多くの軌跡サンプルを試行するため増加
       batch_size: 800
       # 速度ノイズ（軌跡探索の幅）
-      vx_std: 0.4
-      vy_std: 0.3
-      wz_std: 0.4
+      vx_std: 0.6
+      vy_std: 0.5
+      wz_std: 0.6
       # 速度制限
-      vx_max: 1.5
-      vx_min: -0.6
-      vy_max: 0.8
-      vy_min: -0.8
-      wz_max: 2.0
+      vx_max: 2.5
+      vx_min: -1.0
+      vy_max: 1.5
+      vy_min: -1.5
+      wz_max: 3.5
       # 全方向移動モデル（メカナム用）
       motion_model: "Omni"
       iteration_count: 1
@@ -340,10 +340,10 @@ velocity_smoother:
     scale_velocities: false
     feedback: "OPEN_LOOP"
     # メカナム: [x, y, theta] の順。MPPI の速度制限と合わせる
-    max_velocity: [1.5, 0.8, 2.0]
-    min_velocity: [-0.6, -0.8, -2.0]
-    max_accel: [2.5, 2.5, 3.2]
-    max_decel: [-2.5, -2.5, -3.2]
+    max_velocity: [2.5, 1.5, 3.5]
+    min_velocity: [-1.0, -1.5, -3.5]
+    max_accel: [4.0, 4.0, 4.5]
+    max_decel: [-4.0, -4.0, -4.5]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
@@ -369,7 +369,7 @@ collision_monitor:
       type: "polygon"
       action_type: "approach"
       footprint_topic: "/local_costmap/published_footprint"
-      time_before_collision: 1.2
+      time_before_collision: 0.8
       simulation_time_step: 0.1
       min_points: 6
       visualize: False
