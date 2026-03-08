@@ -38,6 +38,7 @@ class RoutingNode(Node):
         self._current_court: str = "blue"
         self._pending_goal_xyz: tuple[float, float, float] | None = None
         self._goal_retry_count: int = 0
+        self._nav_failure_retry_count: int = 0
 
         pkg_dir = get_package_share_directory("auto_nav")
         wp_path = os.path.join(pkg_dir, "config", "waypoints.yaml")
@@ -162,6 +163,7 @@ class RoutingNode(Node):
     def _send_goal(self, x: float, y: float, theta: float) -> None:
         self._pending_goal_xyz = (x, y, theta)
         self._goal_retry_count = 0
+        self._nav_failure_retry_count = 0
         self._send_goal_impl(x, y, theta)
 
     def _send_goal_impl(self, x: float, y: float, theta: float) -> None:
@@ -233,6 +235,24 @@ class RoutingNode(Node):
             return
 
         if result.status != GoalStatus.STATUS_SUCCEEDED:
+            _NAV_FAILURE_MAX_RETRIES = 5
+            if (
+                self._auto_seq_running
+                and self._state == "NAVIGATING"
+                and self._nav_failure_retry_count < _NAV_FAILURE_MAX_RETRIES
+            ):
+                self._nav_failure_retry_count += 1
+                self.get_logger().warn(
+                    f"Navigation failed (status={result.status}), "
+                    f"retrying goal in 3s... "
+                    f"({self._nav_failure_retry_count}/{_NAV_FAILURE_MAX_RETRIES})"
+                )
+                t = threading.Timer(3.0, self._retry_send_goal)
+                t.daemon = True
+                t.start()
+                return
+
+            # リトライ上限到達またはシーケンス外の失敗
             self._state = "AUTO_IDLE"
             self._auto_seq_running = False
             self._pub_tx.publish(String(data=json.dumps({
