@@ -1,0 +1,66 @@
+# AMCL（Adaptive Monte Carlo Localization）パラメータ
+#
+# 対象ロボット: 4輪メカナムホイール（全方向移動）
+# 入力マップ:   合成 PGM（/home/pi/maps/field_synthetic.yaml）
+# スキャン:     /scan_filtered（laser_filter でタイヤ映り込みを除去済み）
+#
+# 初期位置は routing_node が set_court コマンド受信時に /initialpose で設定する。
+
+amcl:
+  ros__parameters:
+    use_sim_time: false
+
+    # --- パーティクル数（フィールドサイズ: ~30m² / 競技時間優先で少なめ） ---
+    min_particles: 500
+    max_particles: 2000
+
+    # --- モーションモデル（全方向移動ロボット用） ---
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    # オドメトリ誤差パラメータ（回転・並進の相互誤差を小さめに設定）
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+
+    # --- レーザーモデル（壁のみの合成マップに適した尤度場モデル） ---
+    laser_model_type: "likelihood_field"
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    max_beams: 60
+    z_hit: 0.5
+    z_short: 0.05
+    z_max: 0.05
+    z_rand: 0.4
+    sigma_hit: 0.2
+    lambda_short: 0.1
+    do_beamskip: false
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+
+    # --- フレーム設定 ---
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    scan_topic: "scan_filtered"
+    tf_broadcast: true
+    transform_tolerance: 1.0
+
+    # --- フィルタ更新条件（並進 25cm 以上または回転 20° 以上移動後に更新） ---
+    update_min_d: 0.25
+    update_min_a: 0.349
+    resample_interval: 1
+    pf_err: 0.05
+    pf_z: 0.99
+
+    # --- リカバリ（誘拐問題対策。競技中は無効で問題ない） ---
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+
+    # --- 初期位置（routing_node の set_court コマンドで /initialpose を publish するため無効） ---
+    set_initial_pose: false
+    save_pose_rate: 0.5
+    # map_server が遅延起動しても /map を受け取れるよう TRANSIENT_LOCAL で subscribe
+    map_subscribe_transient_local: true

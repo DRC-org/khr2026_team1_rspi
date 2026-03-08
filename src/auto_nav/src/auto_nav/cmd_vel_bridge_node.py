@@ -15,9 +15,10 @@ GEAR_RATIO = 19.20320855614973
 L_X = 0.1725
 L_Y = 0.2425
 G = L_X + L_Y
-MAX_RPM = 4000.0
+MAX_RPM = 12000.0
 # M3508 が電流不足で不動になるのを防ぐ最小 RPM（静止摩擦を超えるしきい値）
-MIN_RPM = 700.0
+# 300 RPM ≈ 0.08 m/s — 静止摩擦を超えるのに十分な最小値
+MIN_RPM = 300.0
 # cmd_vel がこの秒数来なければゼロ RPM を送って停止（ESP32 watchdog より確実な安全停止）
 CMD_VEL_TIMEOUT = 0.3
 

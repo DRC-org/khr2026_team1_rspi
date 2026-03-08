@@ -427,6 +427,72 @@ ros2 topic pub /bluetooth_rx std_msgs/String '{data: "{\"type\": \"set_court\", 
 
 ---
 
+### フェーズ 12: 事前フィールドマップ + AMCL 自己位置推定への移行 ✅ 完了（2026-03-08）
+
+#### 概要
+
+毎回の物理マッピングを廃止し、ルールブック寸法から合成 PGM マップを生成して AMCL で自己位置推定するよう切り替えた。
+
+#### 変更ファイル
+
+| ファイル | 変更種別 | 内容 |
+|---------|---------|------|
+| `src/auto_nav/config/field_dimensions.yaml` | 新規 | フィールド寸法・コート別初期位置 |
+| `src/auto_nav/scripts/generate_field_map.py` | 新規 | field_dimensions.yaml → PGM/YAML 生成 |
+| `src/auto_nav/config/amcl_params.yaml` | 新規 | AMCL パラメータ（OmniMotionModel） |
+| `src/auto_nav/config/nav2_params.yaml` | 修正 | lifecycle_manager_localization セクション追加 |
+| `src/auto_nav/launch/auto_nav_launch.py` | 修正 | slam_toolbox/scan_relay 削除、map_server+amcl+lifecycle_manager_localization 追加 |
+| `src/auto_nav/src/auto_nav/routing_node.py` | 修正 | set_court 受信時に /initialpose を publish |
+
+#### 起動手順
+
+```bash
+# 1. 合成マップ生成（初回 + フィールド寸法変更時）
+ros2 run auto_nav generate_field_map.py
+# → /home/pi/maps/field_synthetic.pgm + field_synthetic.yaml が生成される
+
+# 2. ウェイポイント再生成（新マップ座標系に合わせる）
+# ※ waypoints_relative.yaml を新座標系向けに更新してから実行
+python3 src/auto_nav/scripts/generate_waypoints.py \
+    --map /home/pi/maps/field_synthetic.pgm \
+    --meta /home/pi/maps/field_synthetic.yaml \
+    --relative src/auto_nav/config/waypoints_relative.yaml \
+    --output src/auto_nav/config/waypoints.yaml
+
+# 3. 自律走行起動
+ros2 launch auto_nav auto_nav_launch.py
+# マップを明示指定する場合:
+ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field_synthetic.yaml
+```
+
+#### 検証コマンド
+
+```bash
+# AMCL 自己位置確認
+ros2 topic echo /amcl_pose
+
+# map→odom TF が配信されているか確認（AMCL が正常動作していれば map フレームが現れる）
+ros2 run tf2_tools view_frames
+
+# /map トピックが配信されているか確認
+ros2 topic echo --qos-reliability reliable /map nav_msgs/msg/OccupancyGrid --field info
+
+# lifecycle_manager_localization の状態確認
+ros2 service call /lifecycle_manager_localization/is_active std_srvs/srv/Trigger
+```
+
+#### 注意事項
+
+- `set_court` コマンドを送ると routing_node が `/initialpose` を publish して AMCL に初期位置を伝える
+  → 競技前に必ず `set_court` を実行すること
+- 初期位置は `field_dimensions.yaml` の `start_positions` セクションに定義。実機確認後に更新する
+- 合成マップの座標系（中心=(0,0)、青コート=+X）は旧 SLAM マップと異なる
+  → `waypoints_relative.yaml` を新座標系向けに見直す必要がある
+- `scan_relay_node`（slam_toolbox TF 遅延ハック）は不要になったため削除済み
+- `colcon build --cmake-force-configure` が必要だった（file(GLOB) のキャッシュ問題）
+
+---
+
 ### フェーズ 11: エラーアラートとシーケンス途中再開 ✅ 完了（2026-03-04）
 
 #### 「続行不可能」の定義
@@ -608,6 +674,32 @@ map
 
 ---
 
+### センサフュージョン改善メモ
+
+現状の EKF + AMCL 構成は動作するが、以下の改善余地がある。
+
+1. **IMU 加速度の有効化**（優先度: 中）
+   - 現状: `ax`, `ay` は単位未確認（mg か m/s² か不明）のため無効
+   - 改善: `ros2 topic echo /imu` で raw 値を確認し単位を特定したうえで `ekf_params.yaml` の `imu0_config` を有効化
+   - 効果: 急加速・急停止時のオドメトリ精度向上
+
+2. **IMU orientation の差分利用**（優先度: 低）
+   - 現状: 磁気干渉で orientation（絶対方位）が不正確なため無効
+   - 改善: `imu0_differential: true` に変更すると絶対方位ではなく角度変化量として使えるため、干渉の影響を受けにくくなる可能性がある
+   - 効果: vyaw の精度向上（現在は vyaw のみ使用中）
+
+3. **AMCL 更新トリガーを細かくする**（優先度: 中）
+   - 現状: `update_min_d: 0.25`（25cm）, `update_min_a: 0.349`（20°）
+   - 改善: `update_min_d: 0.10〜0.15` に下げる
+   - 効果: 位置推定の追従が速くなる（CPU 負荷とのトレードオフ）
+
+4. **AMCL の z_rand を下げる**（優先度: 低）
+   - 現状: `z_rand: 0.4`（ビームの 40% をランダムノイズとして扱う）
+   - 改善: 合成 PGM（壁のみの理想マップ）では `0.2〜0.3` が適切
+   - 効果: パーティクルの収束が速くなる
+
+---
+
 ### リスクと注意点
 
 1. **オドメトリ精度**: メカナムホイールはスリップしやすい。マッピング中は 0.2m/s 以下で走行すること。
@@ -690,6 +782,40 @@ sudo apt install \
   - 正: `(-x, y, π-θ)` ← 南北線（縦線）対称
   - フィールドは赤（左）・青（右）コートが横並び、北南線で線対称。X軸反転が正しい
   - θ 変換: 縦線反転では `π - θ`（東向き→西向き、北向き→北向きのまま）
+
+### 2026-03-08（2回目）
+
+- **AMCL 移行後の各種修正・整理**
+  - `field_dimensions.yaml`: マップ固定（外寸方式）に伴い全寸法を実測値に更新
+    - `width: 6.962`, `height: 7.0`, `wall_thickness: 0.038`
+    - `origin.y: 0.0`（フィールド南端外壁外側が y=0）
+    - `start_positions.y: 0.288`（南壁内側面 0.038 + ロボット半径 0.25）
+    - `internal_walls` に仕切り壁・矢倉・エリア壁・本丸を追加
+  - `generate_field_map.py`: `internal_walls` 描画ロジックを実装
+  - `mapping_launch.py` 削除（AMCL 移行により不要）
+  - `generate_waypoints.py` 削除・`waypoints_relative.yaml` 削除（マップ固定により相対座標変換が不要に）
+  - `waypoints.yaml` を直接編集ファイルに変更（絶対座標で記述）
+  - `generate_field_map.py` の docstring・print から `generate_waypoints.py` 参照を削除
+
+- **AMCL デバッグ（`auto_nav_launch.py` 起動時）**
+  - `map_server` の `yaml_filename` パラメータが `.yaml` 拡張子なしで渡される問題を確認
+    → `auto_nav_launch.py` 起動時は `map:=/home/pi/maps/field_synthetic.yaml` を明示すること
+  - AMCL は `set_court` コマンド受信まで `/initialpose` を得られず `map → odom` TF を publish しない（正常動作）
+
+- **センサフュージョン改善メモを `auto_routing_plan.md` に追記**（IMU 加速度有効化・AMCL 更新頻度・z_rand 調整）
+
+### 2026-03-08
+
+- **フェーズ 12**: 事前フィールドマップ + AMCL 自己位置推定への移行
+  - slam_toolbox (localization) と scan_relay_node を廃止
+  - `generate_field_map.py` でルールブック寸法から合成 PGM/YAML を生成するスクリプトを追加
+  - `amcl_params.yaml` を新規作成（OmniMotionModel、scan_topic=scan_filtered）
+  - `nav2_params.yaml` に `lifecycle_manager_localization`（map_server + amcl）セクションを追加
+  - `auto_nav_launch.py`: slam_toolbox/scan_relay → map_server + amcl + lifecycle_manager_localization
+  - `routing_node.py`: `set_court` 受信時に `field_dimensions.yaml` の `start_positions` から `/initialpose` を publish
+  - `colcon build --cmake-force-configure` が必要だった（新スクリプトを file(GLOB) で拾うためキャッシュクリアが必要）
+  - 合成マップ検証: `generate_field_map.py` → 148×80px PGM 生成、`generate_waypoints.py --dry-run` で壁検出座標を確認（north=1.95, south=-2.0, west=-3.7, east=3.65）
+  - **要対応**: `waypoints_relative.yaml` を新座標系（中心=0,0、青コート=+X）向けに更新が必要
 
 ### 2026-03-07
 

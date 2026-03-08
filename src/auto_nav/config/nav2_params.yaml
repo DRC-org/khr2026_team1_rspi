@@ -4,10 +4,25 @@
 # ローカルプランナー: DWB（全方向移動に対応するため Y 方向速度を有効化）
 # グローバルプランナー: NavfnPlanner（A*）
 #
-# map_server は含めない（slam_toolbox が /map を配信済み）
+# ローカリゼーション: AMCL（合成 PGM マップ使用）
+# map_server + amcl は lifecycle_manager_localization が管理
 
 # =============================================================================
-# lifecycle_manager
+# lifecycle_manager_localization（map_server + amcl）
+# =============================================================================
+lifecycle_manager_localization:
+  ros__parameters:
+    autostart: true
+    node_names:
+      - map_server
+      - amcl
+    # RPi での遅延起動や負荷スパイクによる bond 切断を防ぐため延長
+    bond_timeout: 30.0
+    attempt_respawn_reconnection: true
+    bond_respawn_max_duration: 10.0
+
+# =============================================================================
+# lifecycle_manager（Nav2 ナビゲーションノード）
 # =============================================================================
 lifecycle_manager_navigation:
   ros__parameters:
@@ -22,13 +37,16 @@ lifecycle_manager_navigation:
     bond_respawn_max_duration: 10.0
 
 # =============================================================================
-# controller_server（DWB ローカルプランナー）
+# controller_server（MPPI コントローラー、メカナム全方向移動対応）
+# DWB は差動駆動前提の PathAlign/GoalAlign で旋回を強制するため、
+# メカナムの横移動を活かせなかった。MPPI + motion_model:"Omni" で
+# 横移動・斜め移動を自然に使って経路追従する。
 # =============================================================================
 controller_server:
   ros__parameters:
     controller_frequency: 5.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.001  # メカナム: Y 方向停止判定を有効化
+    min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
@@ -37,10 +55,10 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.5
-      movement_time_allowance: 15.0
+      # 壁近傍スタートを考慮して判定距離を小さく・猶予時間を長めに設定
+      required_movement_radius: 0.3
+      movement_time_allowance: 30.0
 
-    # 目標到達判定: ±8cm 以内かつ向き ±6° 以内
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.08
@@ -48,65 +66,77 @@ controller_server:
       stateful: True
 
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: false
-
-      # --- 速度制限（1.0m/s → ~1292RPM、MAX_RPM=4000 の 32% で余裕あり） ---
-      min_vel_x: -0.5
-      max_vel_x: 1.0
-      # メカナム全方向移動: Y 方向速度を有効化
-      min_vel_y: -0.5
-      max_vel_y: 0.5
-      max_vel_theta: 1.0
-      min_speed_xy: 0.0
-      max_speed_xy: 1.0
-      min_speed_theta: 0.0
-
-      # --- 加速度制限 ---
-      acc_lim_x: 2.5
-      acc_lim_y: 2.5
-      acc_lim_theta: 3.2
-      decel_lim_x: -2.5
-      decel_lim_y: -2.5
-      decel_lim_theta: -3.2
-
-      # --- サンプリング数（Raspberry Pi 負荷軽減のため削減）---
-      vx_samples: 7
-      # メカナム: Y 方向もサンプリングして全方向軌跡を評価
-      vy_samples: 3
-      vtheta_samples: 7
-
-      # --- 軌跡シミュレーション ---
-      sim_time: 1.2
-      linear_granularity: 0.05
-      angular_granularity: 0.025
+      plugin: "nav2_mppi_controller::MPPIController"
+      # Raspberry Pi 負荷軽減: バッチ数・ステップ数を最小限に
+      # model_dt >= 1/controller_frequency (0.2s) が必要
+      time_steps: 30
+      model_dt: 0.2
+      # 壁近傍の狭路でより多くの軌跡サンプルを試行するため増加
+      batch_size: 800
+      # 速度ノイズ（軌跡探索の幅）
+      vx_std: 0.4
+      vy_std: 0.3
+      wz_std: 0.4
+      # 速度制限
+      vx_max: 1.5
+      vx_min: -0.6
+      vy_max: 0.8
+      vy_min: -0.8
+      wz_max: 2.0
+      # 全方向移動モデル（メカナム用）
+      motion_model: "Omni"
+      iteration_count: 1
+      prune_distance: 1.5
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.08
-      trans_stopped_velocity: 0.25
-      short_circuit_trajectory_evaluation: true
-      stateful: true
-
-      # --- 評価 Critics ---
-      # RotateToGoal: メカナムでは不要な場合あり。精度が悪い場合は scale を 0 に
+      temperature: 0.3
+      gamma: 0.015
+      # true にすると /trajectories (MarkerArray) にサンプル軌跡を配信
+      visualize: true
+      retry_attempt_limit: 1
       critics:
-        - "RotateToGoal"
-        - "Oscillation"
-        - "BaseObstacle"
-        - "GoalAlign"
-        - "PathAlign"
-        - "PathDist"
-        - "GoalDist"
-
-      BaseObstacle.scale: 0.02
-      PathAlign.scale: 8.0
-      PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
+        - "ConstraintCritic"
+        - "CostCritic"
+        - "GoalCritic"
+        - "GoalAngleCritic"
+        - "PathAlignCritic"
+        - "PathFollowCritic"
+      ConstraintCritic.enabled: true
+      ConstraintCritic.cost_power: 1
+      ConstraintCritic.cost_weight: 4.0
+      # CostCritic: コストマップの障害物コストを評価（壁回避）
+      # critical_cost > 254(LETHAL) にすることで collision_cost は真の衝突のみに適用
+      # → INSCRIBED/インフレーションゾーンを collision_cost で全部潰さない
+      CostCritic.enabled: true
+      CostCritic.cost_power: 1
+      CostCritic.cost_weight: 3.81
+      CostCritic.critical_cost: 300.0
+      CostCritic.consider_footprint: false
+      CostCritic.collision_cost: 1000000.0
+      CostCritic.near_goal_distance: 1.0
+      GoalCritic.enabled: true
+      GoalCritic.cost_power: 1
+      GoalCritic.cost_weight: 5.0
+      GoalCritic.threshold_to_consider: 1.0
+      GoalAngleCritic.enabled: true
+      GoalAngleCritic.cost_power: 1
+      GoalAngleCritic.cost_weight: 3.0
+      GoalAngleCritic.threshold_to_consider: 0.5
+      # PathAlignCritic: 横移動でパス上に乗る（use_path_orientations:false で向き強制しない）
+      PathAlignCritic.enabled: true
+      PathAlignCritic.cost_power: 1
+      PathAlignCritic.cost_weight: 14.0
+      PathAlignCritic.max_path_occupancy_ratio: 0.05
+      PathAlignCritic.trajectory_point_step: 3
+      PathAlignCritic.threshold_to_consider: 0.5
+      PathAlignCritic.offset_from_furthest: 20
+      PathAlignCritic.use_path_orientations: false
+      PathFollowCritic.enabled: true
+      PathFollowCritic.cost_power: 1
+      PathFollowCritic.cost_weight: 5.0
+      PathFollowCritic.offset_from_furthest: 5
+      PathFollowCritic.threshold_to_consider: 1.0
+      # PathAngleCritic: メカナムは向きと移動方向が独立するため不要（削除）
+      # forward_preference:true がロボット後退を禁忌扱いし南向きロボットが詰まる原因だった
 
 # =============================================================================
 # planner_server（NavfnPlanner / A*）
@@ -183,10 +213,8 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: false
-      # グローバル計画用フットプリント（小さめ）: スタート地点が東壁から0.271mしかなく、
-      # SLAM誤差で壁セルが0.200mまで迫るため inscribed_radius=0.18m に抑える
-      # ローカルコストマップは実寸で衝突回避するため安全性は維持される
-      footprint: "[[0.18, 0.25], [-0.18, 0.25], [-0.18, -0.25], [0.18, -0.25]]"
+      # フットプリント実寸: 中心→前後 0.25m、中心→左右 0.29m
+      footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -210,9 +238,10 @@ global_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
+        # circumscribed_radius=0.397m のため inflation_radius >= 0.397m が必要
+        # 0.40m で MPPI CostCritic の最適化衝突チェックが有効になる
         cost_scaling_factor: 3.0
-        # スタート地点が東壁から0.271mしかなく、0.55mではスタートがブロック判定されるため削減
-        inflation_radius: 0.25
+        inflation_radius: 0.40
       always_send_full_costmap: true
 
 # =============================================================================
@@ -230,7 +259,8 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      footprint: "[[0.22, 0.29], [-0.22, 0.29], [-0.22, -0.29], [0.22, -0.29]]"
+      # フットプリント実寸: 中心→前後 0.25m、中心→左右 0.29m
+      footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -248,8 +278,8 @@ local_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.40
       always_send_full_costmap: true
 
 # =============================================================================
@@ -309,9 +339,9 @@ velocity_smoother:
     smoothing_frequency: 10.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    # メカナム: [x, y, theta] の順。Y 方向速度を有効化
-    max_velocity: [1.0, 0.5, 1.0]
-    min_velocity: [-0.5, -0.5, -1.0]
+    # メカナム: [x, y, theta] の順。MPPI の速度制限と合わせる
+    max_velocity: [1.5, 0.8, 2.0]
+    min_velocity: [-0.6, -0.8, -2.0]
     max_accel: [2.5, 2.5, 3.2]
     max_decel: [-2.5, -2.5, -3.2]
     odom_topic: "odom"

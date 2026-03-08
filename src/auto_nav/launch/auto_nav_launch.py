@@ -1,14 +1,14 @@
 """
-自律走行用ランチファイル（ローカリゼーションモード）
+自律走行用ランチファイル（AMCL ローカリゼーションモード）
 
-事前にマッピングを完了し、地図を保存してから使用する:
-  ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
-    "filename: '/home/taiga/maps/field'"
-  → field.posegraph / field.data が生成される
+事前にフィールドマップを生成してから使用する:
+  ros2 run auto_nav generate_field_map.py
+  → /home/pi/maps/field_synthetic.pgm / field_synthetic.yaml が生成される
 
 使い方:
-  ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field
-  ros2 launch auto_nav auto_nav_launch.py map:=/home/taiga/maps/field transport:=udp4
+  ros2 launch auto_nav auto_nav_launch.py
+  ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field_synthetic.yaml
+  ros2 launch auto_nav auto_nav_launch.py transport:=udp4
 
 起動するノード:
   - micro_ros_agent (cwmc)  (ESP32 ↔ ROS2 ブリッジ, /dev/esp32_c)
@@ -18,10 +18,11 @@
   - laser_filter           (/scan → /scan_filtered)
   - odometry_node          (wheel_feedback → /odom_raw, エンコーダのみ)
   - imu_publisher_node     (wheel_feedback → /imu, gyro/accel)
-  # scan_odometry_node は CPU 負荷軽減のため除去（EKF odom1 が全 false のため不要）
   - ekf_filter_node        (/odom_raw + /imu → /odom + TF(odom→base_link))
   - cmd_vel_bridge_node    (/cmd_vel → wheel_control, auto モード時のみ)
-  - slam_toolbox           (localization モード, 保存済み地図で自己位置推定)
+  - map_server             (合成 PGM マップ → /map, lifecycle)
+  - amcl                   (既知マップでのパーティクルフィルタ自己位置推定, lifecycle)
+  - lifecycle_manager_localization (map_server + amcl のライフサイクル管理)
   - nav2_bringup           (controller_server / planner_server / behavior_server / bt_navigator)
   - routing_node           (Bluetooth → NavigateToPose, nav_mode 切り替え)
   - robot_control          (Bluetooth 手動操縦 + ESP32 制御)
@@ -32,11 +33,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch.actions import IncludeLaunchDescription, TimerAction
 
 _BT_VENV_SITE_PACKAGES = os.path.normpath(
     os.path.join(
@@ -59,13 +61,14 @@ _WEB_PYTHONPATH = _WEB_VENV_SITE_PACKAGES + (":" + _existing if _existing else "
 def generate_launch_description():
     auto_nav_share = get_package_share_directory("auto_nav")
     laser_filters_config = os.path.join(auto_nav_share, "config", "laser_filters.yaml")
-    slam_params = os.path.join(auto_nav_share, "config", "slam_localization_params.yaml")
     nav2_params = os.path.join(auto_nav_share, "config", "nav2_params.yaml")
     ekf_params = os.path.join(auto_nav_share, "config", "ekf_params.yaml")
+    amcl_params = os.path.join(auto_nav_share, "config", "amcl_params.yaml")
 
     map_arg = DeclareLaunchArgument(
         "map",
-        description="保存済みマップのパス（拡張子なし）。例: /home/taiga/maps/field",
+        default_value="/home/pi/maps/field_synthetic.yaml",
+        description="map_server に渡すマップ YAML パス。例: /home/pi/maps/field_synthetic.yaml",
     )
 
     debug_arg = DeclareLaunchArgument(
@@ -162,14 +165,6 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
-    scan_relay_node = Node(
-        package="auto_nav",
-        executable="launch_scan_relay.py",
-        name="scan_relay_node",
-        output="screen",
-        emulate_tty=True,
-    )
-
     odometry_node = Node(
         package="auto_nav",
         executable="launch_odometry.py",
@@ -207,36 +202,36 @@ def generate_launch_description():
         ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
-    # slam_toolbox をローカリゼーションモードで起動
-    # map_file_name はローンチ引数 map:= で上書きする
-    slam_toolbox_node = Node(
-        package="slam_toolbox",
-        executable="async_slam_toolbox_node",
-        name="slam_toolbox",
-        parameters=[
-            slam_params,
-            {"map_file_name": LaunchConfiguration("map")},
-        ],
+    # 合成 PGM マップを /map トピックで配信（lifecycle ノード）
+    map_server_node = Node(
+        package="nav2_map_server",
+        executable="map_server",
+        name="map_server",
         output="screen",
         emulate_tty=True,
+        parameters=[
+            {"yaml_filename": LaunchConfiguration("map")},
+            {"use_sim_time": False},
+        ],
     )
 
-    # マッピング時と同様に ros2 service call でライフサイクル管理
-    slam_lifecycle = TimerAction(
-        period=3.0,
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    "bash", "-c",
-                    "ros2 service call /slam_toolbox/change_state"
-                    " lifecycle_msgs/srv/ChangeState '{transition: {id: 1}}'"
-                    " && sleep 2"
-                    " && ros2 service call /slam_toolbox/change_state"
-                    " lifecycle_msgs/srv/ChangeState '{transition: {id: 3}}'",
-                ],
-                output="screen",
-            )
-        ],
+    # 既知マップでのパーティクルフィルタ自己位置推定（lifecycle ノード）
+    amcl_node = Node(
+        package="nav2_amcl",
+        executable="amcl",
+        name="amcl",
+        output="screen",
+        emulate_tty=True,
+        parameters=[amcl_params],
+    )
+
+    # map_server + amcl のライフサイクル管理
+    lifecycle_manager_localization_node = Node(
+        package="nav2_lifecycle_manager",
+        executable="lifecycle_manager",
+        name="lifecycle_manager_localization",
+        output="screen",
+        parameters=[nav2_params],
     )
 
     # Nav2 必要ノードのみを個別起動（navigation_launch.py は不要ノードを多数含むため使わない）
@@ -336,12 +331,14 @@ def generate_launch_description():
             ydlidar_launch,
             static_tf_node,
             laser_filter_node,
-            scan_relay_node,
             odometry_node,
             imu_publisher_node,
             ekf_node,
-            slam_toolbox_node,
-            slam_lifecycle,
+            map_server_node,
+            amcl_node,
+            # EKF が odom→base_link TF を発行し始めるまで AMCL 起動を遅延
+            # （TF なしで起動するとスキャンキューが満杯になり AMCL が LiDAR を一切処理できなくなる）
+            TimerAction(period=8.0, actions=[lifecycle_manager_localization_node]),
             controller_server_node,
             planner_server_node,
             behavior_server_node,

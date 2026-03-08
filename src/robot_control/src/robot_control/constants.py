@@ -1,6 +1,6 @@
 import math
 
-M3508_MAX_RPM = 4000.0  # モータの最大回転数 [rev/min]
+M3508_MAX_RPM = 12000.0  # モータの最大回転数 [rev/min]
 WHEEL_RADIUS = 0.04925  # タイヤの半径 [m]
 GEAR_RATIO = 19.20320855614973  # モータのギア比
 MAX_SPEED_MPS = WHEEL_RADIUS * 2 * math.pi * (M3508_MAX_RPM / GEAR_RATIO / 60)  # 最大速度 [m/s]

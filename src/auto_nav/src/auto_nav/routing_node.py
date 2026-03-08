@@ -4,6 +4,9 @@ import os
 import threading
 import time
 
+import rclpy.duration
+import rclpy.time
+import tf2_ros
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point, PoseWithCovarianceStamped
@@ -33,6 +36,8 @@ class RoutingNode(Node):
         self._current_goal_name = None
         self._goal_handle = None
         self._current_court: str = "blue"
+        self._pending_goal_xyz: tuple[float, float, float] | None = None
+        self._goal_retry_count: int = 0
 
         pkg_dir = get_package_share_directory("auto_nav")
         wp_path = os.path.join(pkg_dir, "config", "waypoints.yaml")
@@ -40,6 +45,12 @@ class RoutingNode(Node):
             data = yaml.safe_load(f)
             self._waypoints = data.get("waypoints", {})
             self._auto_seq_names: list[str] = data.get("auto_sequence", [])
+
+        # field_dimensions.yaml からコート別初期位置を読み込む
+        dims_path = os.path.join(pkg_dir, "config", "field_dimensions.yaml")
+        with open(dims_path) as f:
+            dims = yaml.safe_load(f)
+        self._start_positions: dict = dims.get("start_positions", {})
 
         self._sub = self.create_subscription(String, "bluetooth_rx", self._on_bt_rx, 10)
         self._pub_mode = self.create_publisher(String, "/nav_mode", 10)
@@ -56,6 +67,8 @@ class RoutingNode(Node):
         self._timer_pos = self.create_timer(0.2, self._publish_robot_pos)
 
         self._action_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
+        self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         self._pub_markers = self.create_publisher(MarkerArray, "/waypoint_markers", 10)
         self.create_timer(1.0, self._publish_waypoint_markers)
@@ -147,6 +160,11 @@ class RoutingNode(Node):
         self._pub_tx.publish(String(data=json.dumps(nav_msg)))
 
     def _send_goal(self, x: float, y: float, theta: float) -> None:
+        self._pending_goal_xyz = (x, y, theta)
+        self._goal_retry_count = 0
+        self._send_goal_impl(x, y, theta)
+
+    def _send_goal_impl(self, x: float, y: float, theta: float) -> None:
         # navigate_to_pose サーバー未起動の場合は 5 秒待ってタイムアウト
         if not self._action_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error("NavigateToPose server not available")
@@ -175,11 +193,34 @@ class RoutingNode(Node):
     def _goal_response_cb(self, future) -> None:
         self._goal_handle = future.result()
         if not self._goal_handle.accepted:
-            self.get_logger().warn("Goal rejected by NavigateToPose server")
+            # bt_navigator が active 状態になる前にゴールが届いた場合はリトライ
+            _MAX_RETRIES = 3
+            if self._state == "NAVIGATING" and self._goal_retry_count < _MAX_RETRIES:
+                self._goal_retry_count += 1
+                self.get_logger().warn(
+                    f"Goal rejected (bt_navigator not yet active?), "
+                    f"retry {self._goal_retry_count}/{_MAX_RETRIES} in 2s..."
+                )
+                t = threading.Timer(2.0, self._retry_send_goal)
+                t.daemon = True
+                t.start()
+                return
+            self.get_logger().warn("Goal rejected by NavigateToPose server (all retries exhausted)")
             self._state = "AUTO_IDLE"
             self._auto_seq_running = False
+            self._pub_tx.publish(String(data=json.dumps({
+                "nav_status": "error",
+                "message": "navigate_to_pose server rejected goal",
+                "seq_index": self._auto_seq_index,
+                "seq_total": len(self._auto_seq_names),
+            })))
             return
         self._goal_handle.get_result_async().add_done_callback(self._result_cb)
+
+    def _retry_send_goal(self) -> None:
+        if self._pending_goal_xyz and self._state == "NAVIGATING":
+            x, y, theta = self._pending_goal_xyz
+            self._send_goal_impl(x, y, theta)
 
     def _result_cb(self, future) -> None:
         from action_msgs.msg import GoalStatus
@@ -282,10 +323,40 @@ class RoutingNode(Node):
         if court not in ("blue", "red"):
             return
         self._current_court = court
+
+        # AMCL にロボット初期位置を通知（field_dimensions.yaml の start_positions を使用）
+        self._publish_start_pose(court)
+
         self._pub_tx.publish(String(data=json.dumps({
             "nav_status": "court_set",
             "court": court,
         })))
+
+    def _publish_start_pose(self, court: str) -> None:
+        pos = self._start_positions.get(court)
+        if not pos:
+            self.get_logger().warn(f"start_positions に {court} が定義されていません")
+            return
+        x: float = pos["x"]
+        y: float = pos["y"]
+        yaw: float = pos["yaw"]
+
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        # 0.5s 前のスタンプを使用: EKF が確実に発行済みの TF が存在し
+        # "extrapolation into the future" エラーを防ぐ
+        msg.header.stamp = (
+            self.get_clock().now() - rclpy.duration.Duration(seconds=0.5)
+        ).to_msg()
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        # 初期位置の不確かさ: ±0.5m・±0.2 rad
+        msg.pose.covariance[0] = 0.25   # x
+        msg.pose.covariance[7] = 0.25   # y
+        msg.pose.covariance[35] = 0.04  # yaw
+        self._pub_initial_pose.publish(msg)
 
     def _handle_start_auto(self, from_index: int = 0) -> None:
         if self._state == "MANUAL":
@@ -311,34 +382,61 @@ class RoutingNode(Node):
         self._auto_seq_index = from_index
         self._sequence_abort.clear()
 
-        if from_index > 0:
-            # 手動移動後のリローカライズ: 別スレッドで initialpose publish + 3 秒待機後に開始
-            t = threading.Thread(
-                target=self._relocate_and_start,
-                args=(from_index,),
-                daemon=True,
-            )
-            t.start()
-        else:
-            self._advance_auto_sequence()
+        # from_index=0 でも initialpose を publish して AMCL 収束を待ってから開始
+        t = threading.Thread(
+            target=self._relocate_and_start,
+            args=(from_index,),
+            daemon=True,
+        )
+        t.start()
 
     def _relocate_and_start(self, from_index: int) -> None:
-        wp_name = self._auto_seq_names[from_index]
-        self._publish_initial_pose_at_waypoint(wp_name)
+        if from_index == 0:
+            # シーケンス開始: コート別スタート位置で AMCL を初期化
+            self._publish_start_pose(self._current_court)
+        else:
+            # 手動移動後のリローカライズ: 移動先ウェイポイント位置で初期化
+            wp_name = self._auto_seq_names[from_index]
+            self._publish_initial_pose_at_waypoint(wp_name)
 
-        # slam_toolbox のスキャンマッチング収束と Nav2 コストマップ更新を待つ
-        countdown = 3
-        for remaining in range(countdown, 0, -1):
+        wp_name = self._auto_seq_names[from_index]
+
+        # map→odom TF が確立されるまで待機（AMCL ローカライズ完了 + Nav2 コストマップ更新を保証）
+        # 固定秒数ではなく実際の TF 存在チェックで判定するため、マップ読み込みの遅延に対応できる
+        _WAIT_TIMEOUT = 30.0
+        _PUBLISH_INTERVAL = 1.0
+        deadline = time.monotonic() + _WAIT_TIMEOUT
+        last_pub = 0.0
+
+        self.get_logger().info("Waiting for AMCL to establish map→odom TF...")
+        tf_ready = False
+        while time.monotonic() < deadline:
             if self._sequence_abort.is_set():
                 return
-            self._pub_tx.publish(String(data=json.dumps({
-                "nav_status": "relocating",
-                "countdown": remaining,
-                "waypoint": wp_name,
-                "seq_index": from_index,
-                "seq_total": len(self._auto_seq_names),
-            })))
-            time.sleep(1.0)
+            try:
+                self._tf_buffer.lookup_transform("map", "odom", rclpy.time.Time())
+                tf_ready = True
+                break
+            except Exception:
+                pass
+
+            now = time.monotonic()
+            if now - last_pub >= _PUBLISH_INTERVAL:
+                last_pub = now
+                remaining = max(0, int(deadline - now))
+                self._pub_tx.publish(String(data=json.dumps({
+                    "nav_status": "relocating",
+                    "countdown": remaining,
+                    "waypoint": wp_name,
+                    "seq_index": from_index,
+                    "seq_total": len(self._auto_seq_names),
+                })))
+            time.sleep(0.2)
+
+        if not tf_ready:
+            self.get_logger().warn("map→odom TF not available after timeout, proceeding anyway")
+        else:
+            self.get_logger().info("map→odom TF confirmed, starting navigation")
 
         if self._sequence_abort.is_set():
             return
@@ -352,7 +450,11 @@ class RoutingNode(Node):
 
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = "map"
-        msg.header.stamp = self.get_clock().now().to_msg()
+        # 0.5s 前のスタンプを使用: EKF が確実に発行済みの TF が存在し
+        # "extrapolation into the future" エラーを防ぐ
+        msg.header.stamp = (
+            self.get_clock().now() - rclpy.duration.Duration(seconds=0.5)
+        ).to_msg()
         msg.pose.pose.position.x = x
         msg.pose.pose.position.y = y
         msg.pose.pose.orientation.z = math.sin(theta / 2.0)
