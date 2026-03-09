@@ -371,9 +371,10 @@ class RoutingNode(Node):
                 px = cos_y * yagura_pos.point.x - sin_y * yagura_pos.point.y + tx
                 py = sin_y * yagura_pos.point.x + cos_y * yagura_pos.point.y + ty
 
-                # ロボット中心を櫓の東 approach_dist に置く（南向き固定）
-                goal_x = px + approach_dist
-                goal_y = py
+                # 右ハンドが届くよう、ロボット中心を櫓の南 approach_dist に置く
+                # → 櫓がロボットの北側 approach_dist の位置に来る
+                goal_x = px
+                goal_y = py - approach_dist
                 goal_theta = -math.pi / 2.0
 
                 # ネスト航行を開始してシーケンススレッドで完了を待つ
