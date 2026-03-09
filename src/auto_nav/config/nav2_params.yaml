@@ -58,8 +58,8 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 8
-      model_dt: 0.1
+      time_steps: 5
+      model_dt: 0.2
       batch_size: 800
       vx_std: 0.5
       vy_std: 0.25
@@ -70,10 +70,10 @@ controller_server:
       vy_min: -1.5
       wz_max: 3.5
       motion_model: "Omni"
-      iteration_count: 3
+      iteration_count: 5
       prune_distance: 2.5
       transform_tolerance: 0.2
-      temperature: 0.3
+      temperature: 0.15
       gamma: 0.015
       # /optimal_trajectory (採用経路) と /trajectories (全サンプル) を配信。
       # RViz2 では /trajectories を非表示にして /optimal_trajectory のみ表示する
@@ -101,12 +101,12 @@ controller_server:
       CostCritic.near_goal_distance: 1.0
       GoalCritic.enabled: true
       GoalCritic.cost_power: 1
-      GoalCritic.cost_weight: 5.0
-      GoalCritic.threshold_to_consider: 0.8
+      GoalCritic.cost_weight: 8.0
+      GoalCritic.threshold_to_consider: 1.5
       GoalAngleCritic.enabled: true
       GoalAngleCritic.cost_power: 1
       GoalAngleCritic.cost_weight: 2.0
-      GoalAngleCritic.threshold_to_consider: 0.5
+      GoalAngleCritic.threshold_to_consider: 1.0
       # PathAlignCritic: 横移動でパス上に乗る（use_path_orientations:false で向き強制しない）
       PathAlignCritic.enabled: true
       PathAlignCritic.cost_power: 1
@@ -114,12 +114,12 @@ controller_server:
       PathAlignCritic.max_path_occupancy_ratio: 0.05
       PathAlignCritic.trajectory_point_step: 2
       PathAlignCritic.threshold_to_consider: 0.5
-      PathAlignCritic.offset_from_furthest: 5
+      PathAlignCritic.offset_from_furthest: 3
       PathAlignCritic.use_path_orientations: false
       PathFollowCritic.enabled: true
       PathFollowCritic.cost_power: 1
       PathFollowCritic.cost_weight: 5.0
-      PathFollowCritic.offset_from_furthest: 5
+      PathFollowCritic.offset_from_furthest: 3
       PathFollowCritic.threshold_to_consider: 0.5
       # PathAngleCritic: メカナムは向きと移動方向が独立するため不要（削除）
       # forward_preference:true がロボット後退を禁忌扱いし南向きロボットが詰まる原因だった

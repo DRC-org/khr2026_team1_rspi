@@ -128,7 +128,7 @@ class RoutingNode(Node):
         )
         self.create_timer(0.05, self._on_approach_timer)
 
-        self._hand_fb: HandMessage | None = None
+        self._hand_fb_list: list[HandMessage] = []
         self._hand_fb_lock = threading.Lock()
         self._sub_hand_fb = self.create_subscription(
             HandMessage, "hand_feedback", self._on_hand_feedback, 10
@@ -154,7 +154,7 @@ class RoutingNode(Node):
 
     def _on_hand_feedback(self, msg: HandMessage) -> None:
         with self._hand_fb_lock:
-            self._hand_fb = msg
+            self._hand_fb_list.append(msg)
 
     def _on_yagura_pos(self, msg: PointStamped) -> None:
         with self._yagura_pos_lock:
@@ -325,7 +325,7 @@ class RoutingNode(Node):
 
         # 直接アプローチによるキャンセルの場合は _on_approach_timer 側で制御する
         if result.status == GoalStatus.STATUS_CANCELED:
-            if self._state == "DIRECT_APPROACH":
+            if self._state in ("DIRECT_APPROACH", "SEQUENCE", "NAVIGATING"):
                 return
             self._state = "AUTO_IDLE"
             return
@@ -388,9 +388,9 @@ class RoutingNode(Node):
                     "control_type": act.get("control_type", ""),
                     "action": act.get("action_value", ""),
                 }
-                self._pub_rx.publish(String(data=json.dumps(cmd)))
                 with self._hand_fb_lock:
-                    self._hand_fb = None
+                    self._hand_fb_list.clear()
+                self._pub_rx.publish(String(data=json.dumps(cmd)))
             elif action_type == "wait":
                 duration = act.get("duration", 0.0)
                 elapsed = 0.0
@@ -483,19 +483,25 @@ class RoutingNode(Node):
                     if self._sequence_abort.is_set():
                         return
                     with self._hand_fb_lock:
-                        fb = self._hand_fb
-                    if fb is not None:
-                        current = self._read_fb_field(fb, target, control_type)
-                        if current == expected:
+                        msgs = list(self._hand_fb_list)
+                    found = False
+                    grip_fail_detected = False
+                    for fb in msgs:
+                        if self._read_fb_field(fb, target, control_type) == expected:
+                            found = True
                             break
                         if grip_fail_val is not None:
                             # pos 待ちでも state 待ちでも state フィールドを直接参照
-                            fb_state = self._read_fb_field(fb, target, "state")
-                            if fb_state == grip_fail_val:
-                                self._abort_sequence_with_error(
-                                    f"wait_actuator: {target} grip_fail detected"
-                                )
-                                return
+                            if self._read_fb_field(fb, target, "state") == grip_fail_val:
+                                grip_fail_detected = True
+                                break
+                    if found:
+                        break
+                    if grip_fail_detected:
+                        self._abort_sequence_with_error(
+                            f"wait_actuator: {target} grip_fail detected"
+                        )
+                        return
                     time.sleep(interval)
                 else:
                     self._abort_sequence_with_error(
