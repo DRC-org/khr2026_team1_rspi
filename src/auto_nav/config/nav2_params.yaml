@@ -264,7 +264,9 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.5
-        inflation_radius: 0.40
+        # フットプリント対角半径 0.38m に対し、レーザーフィルタの実効除去範囲
+        # (±0.23m×±0.27m) を考慮して 0.30m に縮小。壁際ゴールへの到達性を確保。
+        inflation_radius: 0.30
       always_send_full_costmap: true
 
 # =============================================================================
