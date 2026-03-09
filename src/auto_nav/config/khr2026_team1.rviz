@@ -89,7 +89,7 @@ Visualization Manager:
       Binary threshold: 100
       Class: rviz_default_plugins/Map
       Color Scheme: map
-      Draw Behind: false
+      Draw Behind: true
       Enabled: true
       Name: Map
       Topic:
@@ -98,7 +98,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: map
+        Value: /map
       Update Topic:
         Depth: 5
         Durability Policy: Volatile

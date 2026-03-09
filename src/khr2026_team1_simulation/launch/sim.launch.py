@@ -39,12 +39,13 @@ def generate_launch_description():
         launch_arguments={'gz_args': [f'-v 4 -r {world_file}']}.items(),
     )
 
-    # 3. Spawn robot in Gazebo（Y 反転済みワールド: 南が y=7 なので南側は -y 6.5）
+    # 3. Spawn robot in Gazebo（赤コート初期位置 = field_dimensions start_positions.red）
+    # map: red x=-3.143, y=0.288, yaw=π/2 → Gazebo Y反転: gy=7-0.288=6.712, 北向き=Gazebo -Y → -Y 1.5708
     spawn_entity = Node(
         package='ros_gz_sim',
         executable='create',
         arguments=['-topic', 'robot_description', '-name', 'khr2026_robot',
-                   '-x', '3.0', '-y', '6.5', '-z', '0.05', '-Y', '-1.5708'],
+                   '-x', '-3.143', '-y', '6.712', '-z', '0.05', '-Y', '-1.5708'],
         output='screen'
     )
 
