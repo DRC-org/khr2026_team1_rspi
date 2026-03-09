@@ -1,7 +1,7 @@
 # Nav2 ナビゲーションスタック設定
 #
 # 対象ロボット: 4輪メカナムホイール（M3508）+ YDLiDAR
-# ローカルプランナー: DWB（全方向移動に対応するため Y 方向速度を有効化）
+# ローカルプランナー: DWB（PathDist/GoalDist で向き非依存、メカナム横移動対応）
 # グローバルプランナー: NavfnPlanner（A*）
 #
 # ローカリゼーション: AMCL（合成 PGM マップ使用）
@@ -37,10 +37,10 @@ lifecycle_manager_navigation:
     bond_respawn_max_duration: 10.0
 
 # =============================================================================
-# controller_server（MPPI コントローラー、メカナム全方向移動対応）
-# DWB は差動駆動前提の PathAlign/GoalAlign で旋回を強制するため、
-# メカナムの横移動を活かせなかった。MPPI + motion_model:"Omni" で
-# 横移動・斜め移動を自然に使って経路追従する。
+# controller_server（DWB コントローラー、メカナム全方向移動対応）
+# PathDist/GoalDist はロボット中心の位置のみで評価（向き無関係）。
+# PathAlign/GoalAlign は forward_point 投影で向きを強制するため除外。
+# Twirling で不要な旋回を抑制し、横移動を自然に活かす。
 # =============================================================================
 controller_server:
   ros__parameters:
@@ -66,73 +66,55 @@ controller_server:
       stateful: True
 
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
-      # time_steps >= 21 で Savitzky-Golay スムージングフィルタが有効になる
-      time_steps: 24
-      model_dt: 0.2
-      batch_size: 800
-      vx_std: 0.5
-      vy_std: 0.25
-      wz_std: 0.2
-      vx_max: 2.5
-      vx_min: -2.5
-      vy_max: 1.5
-      vy_min: -1.5
-      wz_max: 3.5
-      motion_model: "Omni"
-      iteration_count: 5
-      prune_distance: 2.5
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      # 運動学制限（メカナム全方向）
+      min_vel_x: -2.5
+      max_vel_x: 2.5
+      min_vel_y: -1.5
+      max_vel_y: 1.5
+      max_vel_theta: 3.5
+      min_speed_xy: 0.0
+      max_speed_xy: 2.5
+      min_speed_theta: 0.0
+      acc_lim_x: 4.0
+      acc_lim_y: 4.0
+      acc_lim_theta: 4.5
+      decel_lim_x: -4.0
+      decel_lim_y: -4.0
+      decel_lim_theta: -4.5
+      # 軌道サンプリング
+      vx_samples: 15
+      vy_samples: 9
+      vtheta_samples: 15
+      sim_time: 1.5
+      linear_granularity: 0.05
+      angular_granularity: 0.025
       transform_tolerance: 0.2
-      temperature: 0.5
-      gamma: 0.015
-      # /optimal_trajectory (採用経路) と /trajectories (全サンプル) を配信。
-      # RViz2 では /trajectories を非表示にして /optimal_trajectory のみ表示する
-      visualize: true
-      retry_attempt_limit: 1
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      # クリティック（向き非依存セット）
+      # BaseObstacle: 中心点のみ衝突判定（ObstacleFootprint はフットプリント全頂点を判定し、
+      # 壁から ~0.63m 以内で全軌道棄却されるため競技フィールドで使えない）
       critics:
-        - "ConstraintCritic"
-        - "CostCritic"
-        - "GoalCritic"
-        - "GoalAngleCritic"
-        - "PathAlignCritic"
-        - "PathFollowCritic"
-      ConstraintCritic.enabled: true
-      ConstraintCritic.cost_power: 1
-      ConstraintCritic.cost_weight: 4.0
-      # CostCritic: コストマップの障害物コストを評価（壁回避）
-      # critical_cost > 254(LETHAL) にすることで collision_cost は真の衝突のみに適用
-      # → INSCRIBED/インフレーションゾーンを collision_cost で全部潰さない
-      CostCritic.enabled: true
-      CostCritic.cost_power: 1
-      CostCritic.cost_weight: 3.81
-      CostCritic.critical_cost: 300.0
-      CostCritic.consider_footprint: false
-      CostCritic.collision_cost: 1000000.0
-      CostCritic.near_goal_distance: 1.0
-      GoalCritic.enabled: true
-      GoalCritic.cost_power: 1
-      GoalCritic.cost_weight: 8.0
-      GoalCritic.threshold_to_consider: 1.5
-      GoalAngleCritic.enabled: true
-      GoalAngleCritic.cost_power: 1
-      GoalAngleCritic.cost_weight: 2.0
-      GoalAngleCritic.threshold_to_consider: 0.5
-      # PathAlignCritic: 横移動でパス上に乗る（use_path_orientations:false で向き強制しない）
-      PathAlignCritic.enabled: true
-      PathAlignCritic.cost_power: 1
-      PathAlignCritic.cost_weight: 4.0
-      PathAlignCritic.max_path_occupancy_ratio: 0.05
-      PathAlignCritic.trajectory_point_step: 3
-      PathAlignCritic.threshold_to_consider: 0.5
-      PathAlignCritic.offset_from_furthest: 5
-      PathAlignCritic.use_path_orientations: false
-      PathFollowCritic.enabled: true
-      PathFollowCritic.cost_power: 1
-      PathFollowCritic.cost_weight: 8.0
-      PathFollowCritic.offset_from_furthest: 5
-      PathFollowCritic.threshold_to_consider: 0.5
-      # PathAngleCritic: メカナムは向きと移動方向が独立するため不要（削除）
-      # forward_preference:true がロボット後退を禁忌扱いし南向きロボットが詰まる原因だった
+        - "BaseObstacle"
+        - "PathDist"
+        - "GoalDist"
+        - "RotateToGoal"
+        - "Oscillation"
+        - "Twirling"
+      BaseObstacle.scale: 0.02
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+      RotateToGoal.xy_goal_tolerance: 0.15
+      Oscillation.scale: 1.0
+      Oscillation.oscillation_reset_dist: 0.05
+      Oscillation.oscillation_reset_angle: 0.2
+      Oscillation.x_only_threshold: -1.0
+      Twirling.scale: 5.0
 
 # =============================================================================
 # planner_server（NavfnPlanner / A*）
@@ -323,7 +305,7 @@ velocity_smoother:
     smoothing_frequency: 10.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    # メカナム: [x, y, theta] の順。MPPI の速度制限と合わせる
+    # メカナム: [x, y, theta] の順。DWB の速度制限と合わせる
     max_velocity: [2.5, 1.5, 3.5]
     min_velocity: [-1.0, -1.5, -3.5]
     max_accel: [4.0, 4.0, 4.5]

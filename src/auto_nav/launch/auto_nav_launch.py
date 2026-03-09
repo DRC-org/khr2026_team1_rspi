@@ -343,7 +343,8 @@ def generate_launch_description():
             planner_server_node,
             behavior_server_node,
             bt_navigator_node,
-            lifecycle_manager_node,
+            # EKF の TF(odom→base_link) + localization 起動後に activate するため遅延
+            TimerAction(period=15.0, actions=[lifecycle_manager_node]),
             routing_node,
             robot_control_node,
             bt_communication_node,
