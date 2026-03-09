@@ -433,6 +433,40 @@ ros2 topic echo /yagura_position
 
 ## 9. 作業記録（最新が上）
 
+### 2026-03-09（2回目）
+
+- **メカナム横滑り補正（スリップ係数 1.35）の導入**
+  - **原因**: 「特定の角度だけ成功し、横移動・斜め移動で混乱した動き」という症状は、メカナムホイールの横方向スリップによる Odometry と AMCL の喧嘩が原因
+    - 横移動時にローラーが空転し、実移動 ≈ エンコーダ換算値 × 0.741
+    - オドメトリは「完璧に進んだ」と誤報告 → AMCL がワープ補正 → Nav2 がパニック → 混乱した動き
+    - 前後移動はタイヤがグリップするため成功、特定角度問題の原因はこれ
+  - **修正箇所**:
+    - `cmd_vel_bridge_node.py`: `vy = msg.linear.y * 1.35`（スリップ分を増幅して実移動を補償）
+    - `odometry_node.py`: `vy = ... * 0.741`（エンコーダ換算値を実移動量に合わせて縮小）
+  - **2変更の意味**:
+    - 指令側(1.35倍): 実移動 = 指令値 × slip_ratio(0.741) × 1.35 ≈ 指令値通り
+    - オドメトリ側(0.741倍): 報告値 ≈ 実移動量 → AMCL と一致
+  - **調整可能範囲**: 床の摩擦・ロボット重量により 1.2〜1.5 の間で微調整
+  - ビルド不要（symlink-install 済み、ノード再起動のみ）
+
+  確認コマンド:
+  ```bash
+  # 横移動テスト（vy 指令が底上げされず小さい値で送られることを確認）
+  ros2 topic pub /cmd_vel geometry_msgs/Twist \
+    "{linear: {x: 0.0, y: 0.2, z: 0.0}, angular: {z: 0.0}}" --rate 5
+  ros2 topic echo /wheel_control
+
+  # 前進テスト（FL/RL 正値、FR/RR 負値で変化なし）
+  ros2 topic pub /cmd_vel geometry_msgs/Twist \
+    "{linear: {x: 0.2, y: 0.0, z: 0.0}, angular: {z: 0.0}}" --rate 5
+  ```
+
+- **`cmd_vel_bridge_node.py` から MIN_RPM 底上げ・HeadingPID を削除**
+  - **原因（MIN_RPM）**: Nav2 微小指令（例: 0.01 m/s）を強制 300 RPM に拡大 → Nav2 クローズドループ破綻
+  - **原因（HeadingPID）**: Nav2 が自分で閉ループ制御しているのに下位ノードが独自ヨー補正 → 制御の二重掛け
+  - **修正**: 両方のブロックを削除し、不要インポート・フィールドも全削除
+  - ビルド不要
+
 ### 2026-03-09
 
 - **MPPI 負荷軽減 & bt_navigator タイムアウト緩和**（`nav2_params.yaml`）
@@ -590,6 +624,38 @@ ros2 topic echo /yagura_position
 - scripts/*.py に実行権限がなかった → `chmod +x` で修正（スクリプト追加時は必ず実行権限を付与すること）
 - `LaserScanRangeFilter` で /scan_filtered 実装（LaserScanFootprintFilter は TF 変換でサイレント失敗するため不使用）
 - slam_toolbox ライフサイクル問題解決: `ros2 service call /slam_toolbox/change_state` を直接呼び出し（デーモン経由不可）
+
+### 2026-03-09
+
+- **CPU 軽量化（フェーズ 1・2 全適用済み）**
+
+  | ファイル | 変更箇所 | 旧値 → 新値 |
+  |---------|---------|------------|
+  | `field_dimensions.yaml` | resolution | 0.05 → 0.10 |
+  | `nav2_params.yaml` | global_costmap.resolution | 0.05 → 0.10 |
+  | `nav2_params.yaml` | local_costmap.resolution | 0.05 → 0.10 |
+  | `nav2_params.yaml` | local_costmap.width/height | 3 → 2 |
+  | `nav2_params.yaml` | local_costmap.update_frequency | 5.0 → 3.0 Hz |
+  | `nav2_params.yaml` | local_costmap.publish_frequency | 2.0 → 1.0 Hz |
+  | `nav2_params.yaml` | MPPI batch_size | 300 → 150 |
+  | `nav2_params.yaml` | MPPI time_steps | 15 → 12 |
+  | `nav2_params.yaml` | MPPI iteration_count | 2 → 1 |
+  | `amcl_params.yaml` | max_particles | 2000 → 800 |
+  | `amcl_params.yaml` | update_min_d | 0.15 → 0.20 m |
+  | `amcl_params.yaml` | update_min_a | 0.10 → 0.20 rad |
+
+  - `generate_field_map.py` を再実行して PGM 再生成済み（140×140px → 70×70px）
+  - **次回: 実機で CPU 使用率・ゴール到達精度（< 5cm）を確認すること**
+
+  ```bash
+  # 検証コマンド
+  top -d 1                          # CPU 使用率確認（別ターミナル）
+  ros2 launch auto_nav auto_nav_launch.py
+  ros2 topic hz /cmd_vel            # 制御周期の乱れ確認
+  ros2 topic echo /global_costmap/costmap_updates | head -5  # 解像度確認
+  ```
+
+  - 軽量化後も精度不足なら MPPI パラメータを元に戻す（batch_size: 300, time_steps: 15, iteration_count: 2 が実績値）
 
 ### 2026-02-21
 

@@ -34,6 +34,9 @@ class WebServerNode(Node):
         self.get_logger().info("WebServerNode started (ws://0.0.0.0:8080/ws)")
 
     def _on_bluetooth_tx(self, msg: String) -> None:
+        with self._clients_lock:
+            if not self._clients:
+                return
         asyncio.run_coroutine_threadsafe(self._broadcast(msg.data), self._loop)
 
     async def _broadcast(self, data: str) -> None:
@@ -86,13 +89,13 @@ class WebServerNode(Node):
 
 def main(args=None):
     import rclpy
-    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.executors import SingleThreadedExecutor
 
     rclpy.init(args=args)
     node = WebServerNode()
-    # MultiThreadedExecutor を使用: aiohttp の Waitable が SingleThreadedExecutor の
-    # コールバックをブロックする問題を回避するため（routing_node と同じ理由）
-    executor = MultiThreadedExecutor()
+    # aiohttp は独立したスレッド・asyncio ループで動作し ROS2 Executor に Waitable を
+    # 登録しないため、SingleThreadedExecutor で十分
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()

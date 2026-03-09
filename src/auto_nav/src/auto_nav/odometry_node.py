@@ -74,7 +74,8 @@ class OdometryNode(Node):
 
         # 前進運動学: 車輪速度 → ロボット機体速度
         vx = (v_fl - v_fr + v_rl - v_rr) / 4.0  # 前後速度 [m/s]
-        vy = -(v_fl + v_fr - v_rl - v_rr) / 4.0  # 左右速度 [m/s]（左が正）
+        # 横滑りにより実移動量はエンコーダ換算値の 1/1.35 ≈ 0.741 倍。AMCL との整合性を保つために縮小する
+        vy = -(v_fl + v_fr - v_rl - v_rr) / 4.0 * 0.741  # 左右速度 [m/s]（左が正）
         omega = -(v_fl + v_fr + v_rl + v_rr) / (4.0 * G)  # 角速度 [rad/s]
 
         # デッドレコニング積分（オイラー法）
