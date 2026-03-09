@@ -58,9 +58,7 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      # 起動時の安全な初期値。routing_node が距離に応じて動的に変更する
-      # （遠方: 8、近傍 ≤1.5m: 3）
-      time_steps: 5
+      time_steps: 4
       model_dt: 0.2
       batch_size: 800
       vx_std: 0.5

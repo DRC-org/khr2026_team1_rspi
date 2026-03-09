@@ -21,10 +21,8 @@ from robot_msgs.msg import HandMessage, WheelMessage
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
-# 距離に応じた MPPI time_steps 動的変更
-NEAR_GOAL_DIST = 1.5            # time_steps を短縮する距離 [m]
-NEAR_GOAL_TIME_STEPS = 3        # ゴール近傍の time_steps
-FAR_GOAL_TIME_STEPS = 8         # ゴール遠方の time_steps
+# MPPI time_steps（固定）
+MPPI_TIME_STEPS = 4
 
 # 直接アプローチ用定数
 DIRECT_APPROACH_DIST = 0.5      # Nav2 → 直接アプローチに切り替える距離 [m]
@@ -124,8 +122,7 @@ class RoutingNode(Node):
         self._sub_scan = self.create_subscription(
             LaserScan, "/scan_filtered", self._on_scan, 10
         )
-        # nav2_params.yaml の初期値（5）と合わせる
-        self._current_time_steps: int = 5
+        self._current_time_steps: int = MPPI_TIME_STEPS
         self._set_params_client = self.create_client(
             SetParameters, "/controller_server/set_parameters"
         )
@@ -841,13 +838,8 @@ class RoutingNode(Node):
                 if self._goal_handle:
                     self._goal_handle.cancel_goal_async()
                     self._goal_handle = None
-                self._set_mppi_time_steps(FAR_GOAL_TIME_STEPS)
                 return
 
-            # MPPI time_steps を距離に応じて動的変更
-            desired = NEAR_GOAL_TIME_STEPS if dist <= NEAR_GOAL_DIST else FAR_GOAL_TIME_STEPS
-            if desired != self._current_time_steps:
-                self._set_mppi_time_steps(desired)
             return
 
         # DIRECT_APPROACH 状態
