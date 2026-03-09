@@ -236,7 +236,7 @@ waypoints:
     theta: -1.5707
     on_arrive:
       - action: yagura_approach
-        approach_dist: 0.35    # 要調整: 櫓中心からロボット中心までの目標距離[m]
+        approach_dist: 0.14    # 櫓ハンドは西側・中心から140mm。ロボット中心が櫓から0.14m東に止まる
         timeout: 30.0
       - action: hand_control
         target: "yagura_1"
