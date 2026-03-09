@@ -469,16 +469,39 @@ ros2 topic echo /yagura_position_2
 
 ### 2026-03-10
 
+- **`yagura_approach` アクション追加**（`routing_node.py`）
+  - **概要**: `on_arrive` シーケンス内で `yagura_position_0` トピックの検出座標を使い、LiDAR 検出した櫓に対して自動アプローチするネスト航行アクション
+  - **仕組み**:
+    1. `yagura_position_0`（`geometry_msgs/PointStamped`）から最近傍櫓の base_link 座標を取得
+    2. TF で map 座標に変換し、ハンドオフセット（`hand_offset_x=0.35m`, `hand_offset_y=0.14m`）を加算してゴール座標を算出
+    3. `_approach_done_event`（`threading.Event`）を使い NavigateToPose を発行してシーケンススレッドで完了を待機
+    4. `theta = -π/2`（南向き）固定
+  - **新フィールド**: `_yagura_pos`, `_yagura_pos_lock`, `_sub_yagura`, `_approach_done_event`, `_approach_success`
+  - **新コールバック**: `_on_yagura_pos()`
+  - **`_result_cb` 変更**: `_approach_done_event` が設定されている場合はシーケンスへの通知のみ行い早期リターン
+  - waypoints.yaml の `on_arrive` に `action: yagura_approach` で使用可
+
+  ```yaml
+  on_arrive:
+    - action: yagura_approach
+      approach_dist: 0.35    # 未使用（将来用）
+      hand_offset_x: 0.35    # 西方向オフセット [m]
+      hand_offset_y: 0.14    # 北方向オフセット [m]
+      timeout: 30.0
+  ```
+
 - **DIRECT_APPROACH 強化: theta P 制御 + LiDAR 補完停止**（`routing_node.py`）
   - **背景**: 従来の DIRECT_APPROACH は単純な xy 直線移動のみ。ウェイポイント到達後の向き（theta）を無視し、かつ AMCL 誤差があると停止精度が低かった
   - **変更内容**:
-    1. `MIN_RPM_FWD` 1500→**1200**、`MIN_RPM_LAT` 3000→**2000**（低速域のガタつきを緩和）
-    2. 並進 P 制御（`KP_POS=1.0`）+ 角速度 P 制御（`KP_YAW=2.0`）を同時実行
-    3. ゴール到達判定に `yaw_error ≤ 0.08 rad` 条件を追加
-    4. `/scan_filtered` を購読し、進行方向前方 ±20° の最小距離 ≤ 0.05m で補完停止
-    5. 逆運動学の `vy` に 1.35x スリップ補償を適用（cmd_vel_bridge_node と同様）
+    1. `MIN_RPM_FWD` 1500→**600**、`MIN_RPM_LAT` 3000→**800**
+    2. DIRECT_APPROACH 中の MIN_RPM 底上げを削除（P 制御のみで速度を決定し自然に減速）
+    3. 並進 P 制御（`KP_POS=1.0`）+ 角速度 P 制御（`KP_YAW=2.0`）を同時実行
+    4. ゴール到達判定に `yaw_error ≤ 0.08 rad` 条件を追加
+    5. `/scan_filtered` を購読し、進行方向前方 ±20° の最小距離 ≤ 0.05m で補完停止
+    6. 逆運動学の `vy` に 1.35x スリップ補償を適用（cmd_vel_bridge_node と同様）
   - **追加定数**: `KP_POS`, `KP_YAW`, `MAX_OMEGA`, `YAW_TOLERANCE`, `LIDAR_FORWARD_ANGLE`, `LIDAR_STOP_DIST`
   - **新メソッド**: `_on_scan()`, `_lidar_forward_min_dist()`
+  - **速度過大の原因と対策**: MIN_RPM 底上げ（旧 1500/3000 RPM）が 0.15 m/s 指令を 0.4〜0.8 m/s に拡大していたため、DIRECT_APPROACH 中は底上げを無効化した
   - ビルド不要（symlink-install 済み、ノード再起動のみ）
 
   確認ログ:
