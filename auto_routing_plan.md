@@ -467,6 +467,55 @@ ros2 topic echo /yagura_position_2
 
 ## 10. 作業記録（最新が上）
 
+### 2026-03-10
+
+- **`yagura_approach` アクション追加**（`routing_node.py`）
+  - **概要**: `on_arrive` シーケンス内で `yagura_position_0` トピックの検出座標を使い、LiDAR 検出した櫓に対して自動アプローチするネスト航行アクション
+  - **仕組み**:
+    1. `yagura_position_0`（`geometry_msgs/PointStamped`）から最近傍櫓の base_link 座標を取得
+    2. TF で map 座標に変換し、ハンドオフセット（`hand_offset_x=0.35m`, `hand_offset_y=0.14m`）を加算してゴール座標を算出
+    3. `_approach_done_event`（`threading.Event`）を使い NavigateToPose を発行してシーケンススレッドで完了を待機
+    4. `theta = -π/2`（南向き）固定
+  - **新フィールド**: `_yagura_pos`, `_yagura_pos_lock`, `_sub_yagura`, `_approach_done_event`, `_approach_success`
+  - **新コールバック**: `_on_yagura_pos()`
+  - **`_result_cb` 変更**: `_approach_done_event` が設定されている場合はシーケンスへの通知のみ行い早期リターン
+  - waypoints.yaml の `on_arrive` に `action: yagura_approach` で使用可
+
+  ```yaml
+  on_arrive:
+    - action: yagura_approach
+      approach_dist: 0.35    # 未使用（将来用）
+      hand_offset_x: 0.35    # 西方向オフセット [m]
+      hand_offset_y: 0.14    # 北方向オフセット [m]
+      timeout: 30.0
+  ```
+
+- **DIRECT_APPROACH 強化: theta P 制御 + LiDAR 補完停止**（`routing_node.py`）
+  - **背景**: 従来の DIRECT_APPROACH は単純な xy 直線移動のみ。ウェイポイント到達後の向き（theta）を無視し、かつ AMCL 誤差があると停止精度が低かった
+  - **変更内容**:
+    1. `MIN_RPM_FWD` 1500→**600**、`MIN_RPM_LAT` 3000→**800**
+    2. DIRECT_APPROACH 中の MIN_RPM 底上げを削除（P 制御のみで速度を決定し自然に減速）
+    3. 並進 P 制御（`KP_POS=1.0`）+ 角速度 P 制御（`KP_YAW=2.0`）を同時実行
+    4. ゴール到達判定に `yaw_error ≤ 0.08 rad` 条件を追加
+    5. `/scan_filtered` を購読し、進行方向前方 ±20° の最小距離 ≤ 0.05m で補完停止
+    6. 逆運動学の `vy` に 1.35x スリップ補償を適用（cmd_vel_bridge_node と同様）
+  - **追加定数**: `KP_POS`, `KP_YAW`, `MAX_OMEGA`, `YAW_TOLERANCE`, `LIDAR_FORWARD_ANGLE`, `LIDAR_STOP_DIST`
+  - **新メソッド**: `_on_scan()`, `_lidar_forward_min_dist()`
+  - **速度過大の原因と対策**: MIN_RPM 底上げ（旧 1500/3000 RPM）が 0.15 m/s 指令を 0.4〜0.8 m/s に拡大していたため、DIRECT_APPROACH 中は底上げを無効化した
+  - ビルド不要（symlink-install 済み、ノード再起動のみ）
+
+  確認ログ:
+  ```
+  "Direct approach activated (dist=X.XXXm)"
+  "Goal reached (direct approach, dist=X.XXXm, yaw_err=X.XXX)"  ← AMCL 停止
+  "Goal reached by LiDAR (forward_dist=X.XXXm)"                 ← LiDAR 停止
+  ```
+
+  調整パラメータ（実機テストで要確認）:
+  - `KP_YAW = 2.0`: 振動するなら小さく、角度残留が大きいなら大きく
+  - `YAW_TOLERANCE = 0.08 rad`: 厳しすぎると到達しない（壁際では緩めに）
+  - `LIDAR_STOP_DIST = 0.05 m`: 開放域では前方に障害物がないので無効、壁際のみ有効
+
 ### 2026-03-09（2回目）
 
 - **メカナム横滑り補正（スリップ係数 1.35）の導入**
@@ -690,6 +739,71 @@ ros2 topic echo /yagura_position_2
   ```
 
   - 軽量化後も精度不足なら MPPI パラメータを元に戻す（batch_size: 300, time_steps: 15, iteration_count: 2 が実績値）
+
+- **壁際ウェイポイント直接アプローチ機能追加（`routing_node.py`）**
+
+  Nav2 のコストマップインフレーションにより壁際ゴールで MPPI が有効軌道を見つけられない問題への対策。
+
+  **仕組み**: `NAVIGATING` 中に 50ms タイマーで距離監視 → 0.5m 以下で Nav2 キャンセル → `DIRECT_APPROACH` 状態に遷移 → TF lookup で位置取得 → P制御で `wheel_control` に直接 publish → 0.05m 以下で到達判定
+
+  | 定数 | 値 | 説明 |
+  |------|-----|------|
+  | `DIRECT_APPROACH_DIST` | 0.5 m | Nav2 → 直接アプローチ切替距離 |
+  | `GOAL_REACHED_DIST` | 0.05 m | ゴール到達判定距離 |
+  | `DIRECT_APPROACH_SPEED` | 0.15 m/s | 直接アプローチ移動速度 |
+
+  **変更詳細**:
+  - `WheelMessage` import + 運動学定数追加（`cmd_vel_bridge_node.py` と同じ値）
+  - `wheel_control` publisher + `_approach_goal_xy` + 50ms タイマー `_on_approach_timer` 追加
+  - `_send_goal` で `_approach_goal_xy` にゴール座標をセット
+  - `_result_cb`: `STATUS_CANCELED` 時に `DIRECT_APPROACH` 状態なら何もしない（タイマー側で制御）
+  - `_handle_mode`/`_handle_stop_auto`: `DIRECT_APPROACH` 時のクリーンアップ（ゼロ RPM 送信 + 状態リセット）
+  - マーカー表示: `DIRECT_APPROACH` も current 判定に追加
+  - MIN_RPM 底上げなし（壁際で暴走防止）
+
+  ```bash
+  # 検証コマンド
+  ros2 launch auto_nav mapping_launch.py   # or auto_nav_launch.py
+  # 壁際ウェイポイントへの自動走行を実行し、以下のログを確認:
+  #   "Direct approach activated (dist=X.XXXm)"
+  #   "Goal reached (direct approach, dist=X.XXXm)"
+  ```
+
+  - **注意**: `DIRECT_APPROACH_DIST`（0.5m）が小さすぎると MPPI が先に詰まる。大きすぎると経路計画の恩恵を失う。実機テストで要調整。
+
+- **直接アプローチ MIN_RPM 修正 + MPPI time_steps 動的変更 + 計算量増加**
+
+  直接アプローチで RPM がモーターデッドゾーン以下（~559 RPM）になりロボットが傾いて停止する問題を修正。
+  併せて MPPI パラメータを距離に応じて動的変更する仕組みを追加。
+
+  **MIN_RPM 修正（`routing_node.py`）**:
+  - 専用定数ではなく `cmd_vel_bridge_node.py` と共通の `MIN_RPM_FWD=1500` / `MIN_RPM_LAT=3000` + lateral_ratio ロジックを使用
+  - 実効速度: 前進時 ~0.40 m/s、横移動時 ~0.81 m/s（0.5m 以内なので許容範囲）
+
+  **MPPI time_steps 動的変更（`routing_node.py` + `nav2_params.yaml`）**:
+  - `/controller_server/set_parameters` サービスで `FollowPath.time_steps` をランタイム変更
+  - `_current_time_steps` で現在値を管理し、変更時のみサービスコール
+
+  | 距離 | time_steps | ホライズン |
+  |------|-----------|-----------|
+  | > 1.5m | 8 | 1.6s（2.5 m/s で 4.0m 先まで見通し） |
+  | ≤ 1.5m | 3 | 0.6s（壁際コスト影響を軽減） |
+  | ≤ 0.5m | 直接アプローチ | Nav2 不使用 |
+
+  **MPPI 計算量増加（`nav2_params.yaml`）**:
+  - `iteration_count`: 2 → 3（最適化反復回数増加で軌道の質向上）
+  - `time_steps`: 5 → 8（遠方時の初期値）
+  - 計算量: 5×2=10 → 8×3=24（遠方）/ 3×3=9（近傍）
+
+  ```bash
+  # 検証コマンド
+  ros2 launch auto_nav auto_nav_launch.py
+  top -d 1  # CPU 使用率確認（別ターミナル）
+  # ログで以下を確認:
+  #   "MPPI time_steps → 3"  (ゴール 1.5m 以内)
+  #   "MPPI time_steps → 8"  (次ゴール送信時 / 直接アプローチ移行時)
+  #   "Direct approach activated" → "Goal reached (direct approach)"
+  ```
 
 ### 2026-02-21
 

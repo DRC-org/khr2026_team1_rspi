@@ -5,34 +5,25 @@
 # グローバルプランナー: NavfnPlanner（A*）
 #
 # ローカリゼーション: AMCL（合成 PGM マップ使用）
-# map_server + amcl は lifecycle_manager_localization が管理
+# map_server + amcl + Nav2 ノードは統合 lifecycle_manager が管理
 
 # =============================================================================
-# lifecycle_manager_localization（map_server + amcl）
+# lifecycle_manager（localization + navigation 統合）
+# node_names の順序 = ライフサイクル遷移順序。
+# map_server → amcl を先に ACTIVE にしてから Nav2 ノードを遷移させる。
 # =============================================================================
-lifecycle_manager_localization:
+lifecycle_manager:
   ros__parameters:
     autostart: true
     node_names:
       - map_server
       - amcl
-    # RPi での遅延起動や負荷スパイクによる bond 切断を防ぐため延長
-    bond_timeout: 30.0
-    attempt_respawn_reconnection: true
-    bond_respawn_max_duration: 10.0
-
-# =============================================================================
-# lifecycle_manager（Nav2 ナビゲーションノード）
-# =============================================================================
-lifecycle_manager_navigation:
-  ros__parameters:
-    autostart: true
-    node_names:
       - controller_server
       - planner_server
       - behavior_server
       - bt_navigator
-    bond_timeout: 20.0
+    # RPi での遅延起動や負荷スパイクによる bond 切断を防ぐため延長
+    bond_timeout: 30.0
     attempt_respawn_reconnection: true
     bond_respawn_max_duration: 10.0
 
@@ -61,14 +52,15 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.05
       yaw_goal_tolerance: 0.40
       stateful: True
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      # time_steps >= 21 で Savitzky-Golay スムージングフィルタが有効になる
-      time_steps: 24
+      # 起動時の安全な初期値。routing_node が距離に応じて動的に変更する
+      # （遠方: 8、近傍 ≤1.5m: 3）
+      time_steps: 5
       model_dt: 0.2
       batch_size: 800
       vx_std: 0.5
@@ -80,15 +72,15 @@ controller_server:
       vy_min: -1.5
       wz_max: 3.5
       motion_model: "Omni"
-      iteration_count: 5
+      iteration_count: 3
       prune_distance: 2.5
       transform_tolerance: 0.2
-      temperature: 0.5
+      temperature: 0.3
       gamma: 0.015
       # /optimal_trajectory (採用経路) と /trajectories (全サンプル) を配信。
       # RViz2 では /trajectories を非表示にして /optimal_trajectory のみ表示する
       visualize: true
-      retry_attempt_limit: 1
+      retry_attempt_limit: 3
       critics:
         - "ConstraintCritic"
         - "CostCritic"
@@ -111,8 +103,8 @@ controller_server:
       CostCritic.near_goal_distance: 1.0
       GoalCritic.enabled: true
       GoalCritic.cost_power: 1
-      GoalCritic.cost_weight: 8.0
-      GoalCritic.threshold_to_consider: 1.5
+      GoalCritic.cost_weight: 5.0
+      GoalCritic.threshold_to_consider: 0.8
       GoalAngleCritic.enabled: true
       GoalAngleCritic.cost_power: 1
       GoalAngleCritic.cost_weight: 2.0
@@ -120,15 +112,15 @@ controller_server:
       # PathAlignCritic: 横移動でパス上に乗る（use_path_orientations:false で向き強制しない）
       PathAlignCritic.enabled: true
       PathAlignCritic.cost_power: 1
-      PathAlignCritic.cost_weight: 4.0
+      PathAlignCritic.cost_weight: 10.0
       PathAlignCritic.max_path_occupancy_ratio: 0.05
-      PathAlignCritic.trajectory_point_step: 3
+      PathAlignCritic.trajectory_point_step: 2
       PathAlignCritic.threshold_to_consider: 0.5
       PathAlignCritic.offset_from_furthest: 5
       PathAlignCritic.use_path_orientations: false
       PathFollowCritic.enabled: true
       PathFollowCritic.cost_power: 1
-      PathFollowCritic.cost_weight: 8.0
+      PathFollowCritic.cost_weight: 5.0
       PathFollowCritic.offset_from_furthest: 5
       PathFollowCritic.threshold_to_consider: 0.5
       # PathAngleCritic: メカナムは向きと移動方向が独立するため不要（削除）
@@ -263,138 +255,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.5
-        inflation_radius: 0.40
+        # フットプリント対角半径 0.38m に対し、レーザーフィルタの実効除去範囲
+        # (±0.23m×±0.27m) を考慮して 0.30m に縮小。壁際ゴールへの到達性を確保。
+        inflation_radius: 0.30
       always_send_full_costmap: true
-
-# =============================================================================
-# smoother_server（パス平滑化）
-# =============================================================================
-smoother_server:
-  ros__parameters:
-    smoother_plugins: ["simple_smoother"]
-    simple_smoother:
-      plugin: "nav2_smoother::SimpleSmoother"
-      tolerance: 1.0e-10
-      max_its: 1000
-      do_refinement: True
-
-# =============================================================================
-# waypoint_follower
-# =============================================================================
-waypoint_follower:
-  ros__parameters:
-    loop_rate: 20
-    stop_on_failure: false
-    action_server_result_timeout: 900.0
-    waypoint_task_executor_plugin: "wait_at_waypoint"
-    wait_at_waypoint:
-      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
-      enabled: True
-      waypoint_pause_duration: 200
-
-# =============================================================================
-# route_server（グラフベースルート計画）
-# =============================================================================
-route_server:
-  ros__parameters:
-    boundary_radius_to_achieve_node: 1.0
-    radius_to_achieve_node: 2.0
-    smooth_corners: true
-    operations: ["AdjustSpeedLimit", "ReroutingService", "CollisionMonitor"]
-    ReroutingService:
-      plugin: "nav2_route::ReroutingService"
-    AdjustSpeedLimit:
-      plugin: "nav2_route::AdjustSpeedLimit"
-    CollisionMonitor:
-      plugin: "nav2_route::CollisionMonitor"
-      max_collision_dist: 3.0
-    edge_cost_functions: ["DistanceScorer", "CostmapScorer"]
-    DistanceScorer:
-      plugin: "nav2_route::DistanceScorer"
-    CostmapScorer:
-      plugin: "nav2_route::CostmapScorer"
-
-# =============================================================================
-# velocity_smoother（速度平滑化）
-# メカナム対応: Y 方向速度を有効化
-# =============================================================================
-velocity_smoother:
-  ros__parameters:
-    smoothing_frequency: 10.0
-    scale_velocities: false
-    feedback: "OPEN_LOOP"
-    # メカナム: [x, y, theta] の順。MPPI の速度制限と合わせる
-    max_velocity: [2.5, 1.5, 3.5]
-    min_velocity: [-1.0, -1.5, -3.5]
-    max_accel: [4.0, 4.0, 4.5]
-    max_decel: [-4.0, -4.0, -4.5]
-    odom_topic: "odom"
-    odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]
-    velocity_timeout: 1.0
-
-# =============================================================================
-# collision_monitor（近接障害物検知・速度ゼロ化）
-# /scan_filtered と /local_costmap/published_footprint を使用
-# =============================================================================
-collision_monitor:
-  ros__parameters:
-    base_frame_id: "base_link"
-    odom_frame_id: "odom"
-    cmd_vel_in_topic: "cmd_vel_smoothed"
-    cmd_vel_out_topic: "cmd_vel"
-    state_topic: "collision_monitor_state"
-    transform_tolerance: 0.2
-    source_timeout: 1.0
-    base_shift_correction: True
-    stop_pub_timeout: 2.0
-    polygons: ["FootprintApproach"]
-    FootprintApproach:
-      type: "polygon"
-      action_type: "approach"
-      footprint_topic: "/local_costmap/published_footprint"
-      time_before_collision: 0.8
-      simulation_time_step: 0.1
-      min_points: 6
-      visualize: False
-      enabled: True
-    observation_sources: ["scan"]
-    scan:
-      type: "scan"
-      # タイヤ映り込みを除去した /scan_filtered を使用
-      topic: /scan_filtered
-      min_height: 0.10
-      max_height: 2.0
-      enabled: True
-
-# =============================================================================
-# docking_server（競技では未使用だが navigation_launch.py が必須ノードとして管理）
-# =============================================================================
-docking_server:
-  ros__parameters:
-    controller_frequency: 50.0
-    initial_perception_timeout: 5.0
-    wait_charge_timeout: 5.0
-    dock_approach_timeout: 30.0
-    undock_linear_tolerance: 0.05
-    undock_angular_tolerance: 0.1
-    max_retries: 3
-    base_frame: "base_link"
-    fixed_frame: "odom"
-    dock_backwards: false
-    dock_prestaging_tolerance: 0.5
-    dock_plugins: ["simple_charging_dock"]
-    simple_charging_dock:
-      plugin: "opennav_docking::SimpleChargingDock"
-      docking_threshold: 0.05
-      staging_x_offset: -0.7
-      use_external_detection_pose: true
-      use_battery_status: false
-      use_stall_detection: false
-      external_detection_timeout: 1.0
-      external_detection_translation_x: -0.18
-      external_detection_translation_y: 0.0
-      external_detection_rotation_roll: -1.57
-      external_detection_rotation_pitch: -1.57
-      external_detection_rotation_yaw: 0.0
-      filter_coef: 0.1

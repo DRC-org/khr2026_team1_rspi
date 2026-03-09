@@ -103,6 +103,42 @@ waypoints:
         control_type: "pos"
         value: "pickup_done"
         timeout: 10.0
+      - action: hand_control
+        target: "ring_1"
+        control_type: "state"
+        action_value: "close"
+      - action: hand_control
+        target: "ring_2"
+        control_type: "state"
+        action_value: "close"
+      - action: wait_actuator
+        target: "ring_1"
+        control_type: "state"
+        value: "close_done"
+        timeout: 10.0
+      - action: wait_actuator
+        target: "ring_2"
+        control_type: "state"
+        value: "close_done"
+        timeout: 10.0
+      - action: hand_control
+        target: "ring_1"
+        control_type: "pos"
+        action_value: "honmaru"
+      - action: hand_control
+        target: "ring_2"
+        control_type: "pos"
+        action_value: "honmaru"
+      - action: wait_actuator
+        target: "ring_1"
+        control_type: "pos"
+        value: "honmaru_done"
+        timeout: 10.0
+      - action: wait_actuator
+        target: "ring_2"
+        control_type: "pos"
+        value: "honmaru_done"
+        timeout: 10.0
 
   yagura_release_1:
     x: 0.809
@@ -235,6 +271,10 @@ waypoints:
     y: 0.3
     theta: -1.5707
     on_arrive:
+      - action: yagura_approach
+        hand_offset_x: 0.35    # 東方向: 櫓がロボット東0.35mに来る
+        hand_offset_y: 0.14    # 北方向: 櫓がロボット北0.14mに来る
+        timeout: 30.0
       - action: hand_control
         target: "yagura_1"
         control_type: "pos"

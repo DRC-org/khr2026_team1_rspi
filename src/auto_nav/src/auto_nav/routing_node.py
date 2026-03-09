@@ -9,14 +9,48 @@ import rclpy.time
 import tf2_ros
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point, PoseWithCovarianceStamped
+from geometry_msgs.msg import Point, PointStamped, PoseWithCovarianceStamped
+from sensor_msgs.msg import LaserScan
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from robot_msgs.msg import HandMessage
+from robot_msgs.msg import HandMessage, WheelMessage
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
+
+# 距離に応じた MPPI time_steps 動的変更
+NEAR_GOAL_DIST = 1.5            # time_steps を短縮する距離 [m]
+NEAR_GOAL_TIME_STEPS = 3        # ゴール近傍の time_steps
+FAR_GOAL_TIME_STEPS = 8         # ゴール遠方の time_steps
+
+# 直接アプローチ用定数
+DIRECT_APPROACH_DIST = 0.5      # Nav2 → 直接アプローチに切り替える距離 [m]
+GOAL_REACHED_DIST = 0.05        # ゴール到達判定距離 [m]
+DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
+
+# 運動学定数（cmd_vel_bridge_node.py と同じ値）
+WHEEL_RADIUS = 0.04925
+GEAR_RATIO = 19.20320855614973
+L_X = 0.1725
+L_Y = 0.2425
+G = L_X + L_Y
+MAX_RPM = 12000.0
+MIN_RPM_FWD = 600.0
+MIN_RPM_LAT = 800.0
+
+# 並進 + 回転 P 制御
+KP_POS = 1.0          # [RPM / (m/s)] 的な無次元ゲイン（実効速度は MIN_RPM で底上げ）
+KP_YAW = 2.0          # [rad/s / rad]
+MAX_OMEGA = 1.5       # 最大角速度 [rad/s]
+YAW_TOLERANCE = 0.08  # ゴール到達判定の角度許容誤差 [rad] ≈ 4.6°
+
+# LiDAR 前方補完停止
+LIDAR_FORWARD_ANGLE = 0.35  # 前方スキャン半角 [rad] ≈ 20°
+LIDAR_STOP_DIST = 0.05      # 前方障害物検知で停止する距離 [m]
+MS_TO_RPM = (60.0 * GEAR_RATIO) / (2.0 * math.pi * WHEEL_RADIUS)
 
 _YAGURA_POS_MAP = {"up": 0, "down": 1, "stopped": 2, "up_done": 3, "down_done": 4}
 _YAGURA_STATE_MAP = {"open": 0, "close": 1, "stopped": 2, "open_done": 3, "close_done": 4}
@@ -32,8 +66,10 @@ class RoutingNode(Node):
       MANUAL ──nav_mode:auto──→ AUTO_IDLE ──nav_goal/start_auto──→ NAVIGATING
         ↑                          ↑   ↑                                │
         └──nav_mode:manual──────────┘   └── AUTO_IDLE ←── SEQUENCE ←───┘
-                                             ↑
-                                    全ウェイポイント完了
+                                             ↑               ↑
+                                    全ウェイポイント完了       │
+                                                     DIRECT_APPROACH
+                                                (距離<0.5m で Nav2 キャンセル→直進)
     """
 
     def __init__(self):
@@ -80,20 +116,52 @@ class RoutingNode(Node):
         self._pub_markers = self.create_publisher(MarkerArray, "/waypoint_markers", 10)
         self.create_timer(1.0, self._publish_waypoint_markers)
 
+        self._pub_wheel = self.create_publisher(WheelMessage, "wheel_control", 10)
+        self._approach_goal_xy: tuple[float, float] | None = None
+        self._approach_goal_theta: float = 0.0
+        self._latest_scan: LaserScan | None = None
+        self._scan_lock = threading.Lock()
+        self._sub_scan = self.create_subscription(
+            LaserScan, "/scan_filtered", self._on_scan, 10
+        )
+        # nav2_params.yaml の初期値（5）と合わせる
+        self._current_time_steps: int = 5
+        self._set_params_client = self.create_client(
+            SetParameters, "/controller_server/set_parameters"
+        )
+        self.create_timer(0.05, self._on_approach_timer)
+
         self._hand_fb: HandMessage | None = None
         self._hand_fb_lock = threading.Lock()
         self._sub_hand_fb = self.create_subscription(
             HandMessage, "hand_feedback", self._on_hand_feedback, 10
         )
 
+        self._yagura_pos: PointStamped | None = None
+        self._yagura_pos_lock = threading.Lock()
+        self._sub_yagura = self.create_subscription(
+            PointStamped, "yagura_position_0", self._on_yagura_pos, 10
+        )
+
+        self._approach_done_event: threading.Event | None = None
+        self._approach_success: bool = False
+
         self._sequence_abort = threading.Event()
         self._sequence_thread: threading.Thread | None = None
         self._auto_seq_running: bool = False
         self._auto_seq_index: int = 0
 
+    def _on_scan(self, msg: LaserScan) -> None:
+        with self._scan_lock:
+            self._latest_scan = msg
+
     def _on_hand_feedback(self, msg: HandMessage) -> None:
         with self._hand_fb_lock:
             self._hand_fb = msg
+
+    def _on_yagura_pos(self, msg: PointStamped) -> None:
+        with self._yagura_pos_lock:
+            self._yagura_pos = msg
 
     def _on_odom(self, msg: Odometry) -> None:
         x_mm = msg.pose.pose.position.x * 1000
@@ -137,6 +205,9 @@ class RoutingNode(Node):
         if mode == "manual":
             if self._state == "NAVIGATING":
                 self._cancel_goal()
+            if self._state == "DIRECT_APPROACH":
+                self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
+                self._approach_goal_xy = None
             self._sequence_abort.set()
             self._auto_seq_running = False
         self._state = "MANUAL" if mode == "manual" else "AUTO_IDLE"
@@ -178,6 +249,8 @@ class RoutingNode(Node):
 
     def _send_goal(self, x: float, y: float, theta: float) -> None:
         self._pending_goal_xyz = (x, y, theta)
+        self._approach_goal_xy = (x, y)
+        self._approach_goal_theta = theta
         self._goal_retry_count = 0
         self._nav_failure_retry_count = 0
         self._send_goal_impl(x, y, theta)
@@ -245,8 +318,18 @@ class RoutingNode(Node):
 
         result = future.result()
 
-        # キャンセル済みの場合は stop_auto/_handle_mode 側で処理済み
+        # yagura_approach のネスト航行完了: シーケンススレッドに通知して即リターン
+        if self._approach_done_event is not None:
+            self._approach_success = (result.status == GoalStatus.STATUS_SUCCEEDED)
+            event = self._approach_done_event
+            self._approach_done_event = None
+            event.set()
+            return
+
+        # 直接アプローチによるキャンセルの場合は _on_approach_timer 側で制御する
         if result.status == GoalStatus.STATUS_CANCELED:
+            if self._state == "DIRECT_APPROACH":
+                return
             self._state = "AUTO_IDLE"
             return
 
@@ -320,6 +403,64 @@ class RoutingNode(Node):
                         return
                     time.sleep(interval)
                     elapsed += interval
+            elif action_type == "yagura_approach":
+                approach_dist = float(act.get("approach_dist", 0.35))
+                timeout = float(act.get("timeout", 30.0))
+
+                # キャッシュされた櫓位置を取得
+                with self._yagura_pos_lock:
+                    yagura_pos = self._yagura_pos
+                if yagura_pos is None:
+                    self._abort_sequence_with_error("yagura_approach: yagura_position_0 未受信")
+                    return
+
+                # 櫓位置を map 座標に変換
+                try:
+                    tf = self._tf_buffer.lookup_transform(
+                        "map", yagura_pos.header.frame_id, rclpy.time.Time()
+                    )
+                except Exception as e:
+                    self._abort_sequence_with_error(f"yagura_approach: TF失敗: {e}")
+                    return
+
+                q = tf.transform.rotation
+                yaw = math.atan2(
+                    2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+                )
+                cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+                tx, ty = tf.transform.translation.x, tf.transform.translation.y
+                px = cos_y * yagura_pos.point.x - sin_y * yagura_pos.point.y + tx
+                py = sin_y * yagura_pos.point.x + cos_y * yagura_pos.point.y + ty
+
+                # 西ハンド位置: 櫓がロボット北0.14m・西0.35mに来るよう配置
+                # → ロボット中心は櫓の南0.14m・東0.35mに止まる
+                hand_offset_x = float(act.get("hand_offset_x", 0.35))  # 西方向オフセット[m]
+                hand_offset_y = float(act.get("hand_offset_y", 0.14))  # 北方向オフセット[m]
+                goal_x = px + hand_offset_x
+                goal_y = py - hand_offset_y
+                goal_theta = -math.pi / 2.0
+
+                # ネスト航行を開始してシーケンススレッドで完了を待つ
+                done_event = threading.Event()
+                self._approach_done_event = done_event
+                self._approach_success = False
+                saved_goal_name = self._current_goal_name
+                self._current_goal_name = "__yagura_approach__"
+                self._state = "NAVIGATING"
+                self._pending_goal_xyz = (goal_x, goal_y, goal_theta)
+                self._goal_retry_count = 0
+                self._nav_failure_retry_count = 0
+                self._send_goal_impl(goal_x, goal_y, goal_theta)
+
+                done_event.wait(timeout=timeout)
+                self._current_goal_name = saved_goal_name
+                self._state = "SEQUENCE"
+
+                if not self._approach_success:
+                    self._abort_sequence_with_error("yagura_approach: ナビゲーション失敗またはタイムアウト")
+                    return
+
             elif action_type == "wait_actuator":
                 target = act.get("target", "")
                 control_type = act.get("control_type", "")
@@ -336,7 +477,7 @@ class RoutingNode(Node):
                 expected = value_map[value_str]
 
                 grip_fail_val = None
-                if target.startswith("ring_") and control_type == "state":
+                if target.startswith("ring_"):
                     grip_fail_val = _RING_STATE_MAP["grip_fail"]
 
                 deadline = time.monotonic() + timeout
@@ -350,11 +491,14 @@ class RoutingNode(Node):
                         current = self._read_fb_field(fb, target, control_type)
                         if current == expected:
                             break
-                        if grip_fail_val is not None and current == grip_fail_val:
-                            self._abort_sequence_with_error(
-                                f"wait_actuator: {target} grip_fail detected"
-                            )
-                            return
+                        if grip_fail_val is not None:
+                            # pos 待ちでも state 待ちでも state フィールドを直接参照
+                            fb_state = self._read_fb_field(fb, target, "state")
+                            if fb_state == grip_fail_val:
+                                self._abort_sequence_with_error(
+                                    f"wait_actuator: {target} grip_fail detected"
+                                )
+                                return
                     time.sleep(interval)
                 else:
                     self._abort_sequence_with_error(
@@ -569,7 +713,11 @@ class RoutingNode(Node):
         self._pub_initial_pose.publish(msg)
 
     def _handle_stop_auto(self) -> None:
-        self._cancel_goal()
+        if self._state == "DIRECT_APPROACH":
+            self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
+            self._approach_goal_xy = None
+        else:
+            self._cancel_goal()
         self._sequence_abort.set()
         self._auto_seq_running = False
         self._state = "AUTO_IDLE"
@@ -590,7 +738,7 @@ class RoutingNode(Node):
 
             is_current = (
                 name == self._current_goal_name
-                and self._state in ("NAVIGATING", "SEQUENCE")
+                and self._state in ("NAVIGATING", "DIRECT_APPROACH", "SEQUENCE")
             )
             is_visited = self._auto_seq_running and i < self._auto_seq_index
 
@@ -664,6 +812,174 @@ class RoutingNode(Node):
             markers.markers.append(del_marker)
 
         self._pub_markers.publish(markers)
+
+    def _on_approach_timer(self) -> None:
+        if self._state not in ("NAVIGATING", "DIRECT_APPROACH"):
+            return
+
+        try:
+            tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        except Exception:
+            return
+
+        if self._approach_goal_xy is None:
+            return
+
+        robot_x = tf.transform.translation.x
+        robot_y = tf.transform.translation.y
+        goal_x, goal_y = self._approach_goal_xy
+        dx = goal_x - robot_x
+        dy = goal_y - robot_y
+        dist = math.hypot(dx, dy)
+
+        if self._state == "NAVIGATING":
+            if dist <= DIRECT_APPROACH_DIST:
+                self.get_logger().info(
+                    f"Direct approach activated (dist={dist:.3f}m)"
+                )
+                self._state = "DIRECT_APPROACH"
+                if self._goal_handle:
+                    self._goal_handle.cancel_goal_async()
+                    self._goal_handle = None
+                self._set_mppi_time_steps(FAR_GOAL_TIME_STEPS)
+                return
+
+            # MPPI time_steps を距離に応じて動的変更
+            desired = NEAR_GOAL_TIME_STEPS if dist <= NEAR_GOAL_DIST else FAR_GOAL_TIME_STEPS
+            if desired != self._current_time_steps:
+                self._set_mppi_time_steps(desired)
+            return
+
+        # DIRECT_APPROACH 状態
+        qz = tf.transform.rotation.z
+        qw = tf.transform.rotation.w
+        yaw = 2.0 * math.atan2(qz, qw)
+
+        # ゴールへの方向ベクトルを base_link 座標系に変換
+        cos_yaw = math.cos(-yaw)
+        sin_yaw = math.sin(-yaw)
+        dx_local = cos_yaw * dx - sin_yaw * dy
+        dy_local = sin_yaw * dx + cos_yaw * dy
+
+        # 角度誤差
+        yaw_error = math.atan2(
+            math.sin(self._approach_goal_theta - yaw),
+            math.cos(self._approach_goal_theta - yaw),
+        )
+
+        # LiDAR 前方距離取得
+        approach_angle = math.atan2(dy_local, dx_local)
+        lidar_dist = self._lidar_forward_min_dist(approach_angle)
+
+        # 停止判定: AMCL or LiDAR どちらかで止まる
+        amcl_reached = dist <= GOAL_REACHED_DIST and abs(yaw_error) <= YAW_TOLERANCE
+        lidar_reached = lidar_dist is not None and lidar_dist <= LIDAR_STOP_DIST
+
+        if amcl_reached or lidar_reached:
+            if amcl_reached:
+                self.get_logger().info(
+                    f"Goal reached (direct approach, dist={dist:.3f}m, yaw_err={yaw_error:.3f})"
+                )
+            else:
+                self.get_logger().info(
+                    f"Goal reached by LiDAR (forward_dist={lidar_dist:.3f}m)"
+                )
+            self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
+            self._approach_goal_xy = None
+
+            wp = self._waypoints.get(self._current_goal_name, {})
+            on_arrive = wp.get("on_arrive", [])
+            if on_arrive:
+                self._state = "SEQUENCE"
+                self._sequence_abort.clear()
+                t = threading.Thread(
+                    target=self._run_on_arrive_sequence,
+                    args=(on_arrive, self._on_sequence_done),
+                    daemon=True,
+                )
+                self._sequence_thread = t
+                t.start()
+            else:
+                self._on_sequence_done()
+            return
+
+        # P 制御: 並進速度
+        vx = KP_POS * dx_local
+        vy = KP_POS * dy_local
+        speed = math.hypot(vx, vy)
+        if speed > DIRECT_APPROACH_SPEED:
+            vx = vx / speed * DIRECT_APPROACH_SPEED
+            vy = vy / speed * DIRECT_APPROACH_SPEED
+
+        # P 制御: 角速度
+        omega = max(-MAX_OMEGA, min(MAX_OMEGA, KP_YAW * yaw_error))
+
+        # 逆運動学（vy に 1.35x スリップ補償）
+        vy_c = vy * 1.35
+        v_fl = +vx - vy_c - G * omega
+        v_fr = -vx - vy_c - G * omega
+        v_rl = +vx + vy_c - G * omega
+        v_rr = -vx + vy_c - G * omega
+
+        rpms = [v * MS_TO_RPM for v in (v_fl, v_fr, v_rl, v_rr)]
+        max_abs = max(abs(r) for r in rpms)
+
+        # 精密位置決め段階なので MIN_RPM 底上げは行わない（P 制御が速度を決める）
+        if max_abs > MAX_RPM:
+            scale = MAX_RPM / max_abs
+            rpms = [r * scale for r in rpms]
+
+        self._publish_wheel_rpms(*rpms)
+
+    def _lidar_forward_min_dist(self, approach_angle_base_link: float) -> float | None:
+        """approach_angle_base_link 方向の前方 ±LIDAR_FORWARD_ANGLE 内の最小距離を返す"""
+        with self._scan_lock:
+            scan = self._latest_scan
+        if scan is None:
+            return None
+
+        min_dist = float("inf")
+        angle = scan.angle_min
+        for r in scan.ranges:
+            # approach_angle_base_link を中心とした ±LIDAR_FORWARD_ANGLE 内のみ対象
+            diff = math.atan2(math.sin(angle - approach_angle_base_link),
+                              math.cos(angle - approach_angle_base_link))
+            if abs(diff) <= LIDAR_FORWARD_ANGLE:
+                if math.isfinite(r) and scan.range_min <= r <= scan.range_max:
+                    min_dist = min(min_dist, r)
+            angle += scan.angle_increment
+
+        return min_dist if math.isfinite(min_dist) else None
+
+    def _set_mppi_time_steps(self, steps: int) -> None:
+        if steps == self._current_time_steps:
+            return
+        self._current_time_steps = steps
+
+        if not self._set_params_client.service_is_ready():
+            self.get_logger().warn("controller_server set_parameters service not ready")
+            return
+
+        param = Parameter()
+        param.name = "FollowPath.time_steps"
+        param.value = ParameterValue(
+            type=ParameterType.PARAMETER_INTEGER, integer_value=steps
+        )
+        req = SetParameters.Request(parameters=[param])
+        future = self._set_params_client.call_async(req)
+        future.add_done_callback(
+            lambda f: self.get_logger().info(f"MPPI time_steps → {steps}")
+        )
+
+    def _publish_wheel_rpms(
+        self, fl: float, fr: float, rl: float, rr: float
+    ) -> None:
+        msg = WheelMessage()
+        msg.m3508_rpms.fl = fl
+        msg.m3508_rpms.fr = fr
+        msg.m3508_rpms.rl = rl
+        msg.m3508_rpms.rr = rr
+        self._pub_wheel.publish(msg)
 
     def _cancel_goal(self) -> None:
         if self._goal_handle:
