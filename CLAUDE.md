@@ -113,6 +113,44 @@ ros2 run bt_communication launch.py
 
 ---
 
+## nav_cli — コマンドライン操作ツール
+
+`src/auto_nav/scripts/nav_cli.py` で提供するCLIツール。
+`bluetooth_rx` に JSON を pub して routing_node を操作し、`bluetooth_tx` の応答を表示する。
+
+### 一発コマンド（スクリプトから呼べる）
+
+```bash
+ros2 run auto_nav nav_cli.py -- mode auto          # 自動モードへ切り替え
+ros2 run auto_nav nav_cli.py -- mode manual        # 手動モードへ切り替え
+ros2 run auto_nav nav_cli.py -- court blue         # 青コートに設定
+ros2 run auto_nav nav_cli.py -- court red          # 赤コートに設定
+ros2 run auto_nav nav_cli.py -- start              # 自動シーケンス開始（index=0）
+ros2 run auto_nav nav_cli.py -- start 2            # index=2 から再開
+ros2 run auto_nav nav_cli.py -- stop               # 自動シーケンス停止
+ros2 run auto_nav nav_cli.py -- go <waypoint>      # ウェイポイントへ単発移動
+```
+
+コマンド送信後、`bluetooth_tx` の応答を最大 3 秒待って表示して終了する。
+
+### インタラクティブモード
+
+```bash
+ros2 run auto_nav nav_cli.py
+```
+
+`nav>` プロンプトで同じコマンドを繰り返し入力できる。
+`bluetooth_tx` のステータスはバックグラウンドで受信して随時出力される。
+`quit` / `exit` / Ctrl-D で終了。
+
+### 実装上の注意
+
+- routing_node が `MANUAL` 状態のままだと `start` / `go` はエラーになる（先に `mode auto` が必要）
+- `bluetooth_tx` が `robot_pos` を高頻度で流しているが nav_cli は無視する（ノイズ防止）
+- ビルド: CMakeLists.txt が `scripts/*.py` を自動インストールするため追加設定不要
+
+---
+
 ## よく使うデバッグコマンド
 
 ```bash

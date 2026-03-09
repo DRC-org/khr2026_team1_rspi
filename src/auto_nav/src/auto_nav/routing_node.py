@@ -12,6 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point, PointStamped, PoseWithCovarianceStamped
 from sensor_msgs.msg import LaserScan
 from nav2_msgs.action import NavigateToPose
+from nav2_msgs.srv import ClearEntireCostmap
 from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import SetParameters
@@ -125,6 +126,9 @@ class RoutingNode(Node):
         self._current_time_steps: int = MPPI_TIME_STEPS
         self._set_params_client = self.create_client(
             SetParameters, "/controller_server/set_parameters"
+        )
+        self._clear_costmap_client = self.create_client(
+            ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap"
         )
         self.create_timer(0.05, self._on_approach_timer)
 
@@ -307,6 +311,7 @@ class RoutingNode(Node):
 
     def _retry_send_goal(self) -> None:
         if self._pending_goal_xyz and self._state == "NAVIGATING":
+            self._clear_local_costmap()
             x, y, theta = self._pending_goal_xyz
             self._send_goal_impl(x, y, theta)
 
@@ -544,7 +549,13 @@ class RoutingNode(Node):
             })))
             self._auto_seq_index += 1
             if self._auto_seq_index < len(self._auto_seq_names):
-                self._advance_auto_sequence()
+                # 到着ウェイポイントの既知座標で自己位置を再アンカーし、
+                # コストマップをクリアしてから次ゴールへ（壁際ウェイポイント対策）
+                self._publish_initial_pose_at_waypoint(self._current_goal_name)
+                self._clear_local_costmap()
+                t = threading.Timer(1.0, self._advance_auto_sequence)
+                t.daemon = True
+                t.start()
                 return
             else:
                 self._auto_seq_running = False
@@ -948,6 +959,12 @@ class RoutingNode(Node):
             angle += scan.angle_increment
 
         return min_dist if math.isfinite(min_dist) else None
+
+    def _clear_local_costmap(self) -> None:
+        if not self._clear_costmap_client.service_is_ready():
+            self.get_logger().warn("clear_costmap service not ready, skipping")
+            return
+        self._clear_costmap_client.call_async(ClearEntireCostmap.Request())
 
     def _set_mppi_time_steps(self, steps: int) -> None:
         if steps == self._current_time_steps:
