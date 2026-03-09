@@ -130,7 +130,11 @@ class OdometryNode(Node):
         odom.twist.covariance[14] = 1e6
         odom.twist.covariance[21] = 1e6
         odom.twist.covariance[28] = 1e6
-        odom.twist.covariance[35] = 0.1   # omega [rad^2/s^2]（同上）
+        # 停止中はエンコーダの omega=0 を EKF に強く信用させ、IMU バイアスドリフトを抑制する
+        if abs(vx) < 0.01 and abs(vy) < 0.01 and abs(omega) < 0.01:
+            odom.twist.covariance[35] = 0.001
+        else:
+            odom.twist.covariance[35] = 0.1   # 移動中: スリップを考慮して不確実性を高める
 
         self._pub_odom.publish(odom)
 

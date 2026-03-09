@@ -4,23 +4,53 @@
 # on_arrive: 到着後に実行するアクション
 
 auto_sequence:
-- waypoint_1
-- waypoint_2
-- waypoint_3
+- yagura_pickup_1
+- ring_pickup_1
+- yagura_release_1
+- yagura_release_2
+- yagura_pickup_2
+- ring_pickup_2
+- yagura_release_3
+- honmaru
 
 waypoints:
-  waypoint_1:
-    x: 1.006
-    y: 1.810
+  yagura_pickup_1:
+    x: 1.404
+    y: 0.25
     theta: -1.5707
     on_arrive: []
-  waypoint_2:
-    x: -2.481
-    y: 6.45
-    theta: 0.0
+  ring_pickup_1:
+    x: 1.703
+    y: 6.712
+    theta: -1.5707
     on_arrive: []
-  waypoint_3:
-    x: 2.419
-    y: 0.5
-    theta: 0.0
+  yagura_release_1:
+    x: 0.809
+    y: 6.462
+    theta: -1.5707
+    on_arrive: []
+  yagura_release_2:
+    x: 0.809
+    y: 5.424
+    theta: -1.5707
+    on_arrive: []
+  yagura_pickup_2:
+    x: 1.404
+    y: 0.3
+    theta: -1.5707
+    on_arrive: []
+  ring_pickup_2:
+    x: 1.703
+    y: 6.212
+    theta: -1.5707
+    on_arrive: []
+  yagura_release_3:
+    x: 0.809
+    y: 2.310
+    theta: -1.5707
+    on_arrive: []
+  honmaru:
+    x: 0.587
+    y: 1.438
+    theta: -1.5707
     on_arrive: []

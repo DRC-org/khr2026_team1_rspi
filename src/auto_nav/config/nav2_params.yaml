@@ -61,20 +61,20 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.08
-      yaw_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.20
       stateful: True
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       # Raspberry Pi 負荷軽減: バッチ数・ステップ数を最小限に
       # model_dt >= 1/controller_frequency (0.2s) が必要
-      time_steps: 30
+      time_steps: 15
       model_dt: 0.2
       # 壁近傍の狭路でより多くの軌跡サンプルを試行するため増加
-      batch_size: 800
+      batch_size: 300
       # 速度ノイズ（軌跡探索の幅）
-      vx_std: 0.6
+      vx_std: 0.4
       vy_std: 0.5
       wz_std: 0.6
       # 速度制限
@@ -85,13 +85,13 @@ controller_server:
       wz_max: 3.5
       # 全方向移動モデル（メカナム用）
       motion_model: "Omni"
-      iteration_count: 1
-      prune_distance: 1.5
+      iteration_count: 2
+      prune_distance: 2.5
       transform_tolerance: 0.2
       temperature: 0.3
       gamma: 0.015
-      # true にすると /trajectories (MarkerArray) にサンプル軌跡を配信
-      visualize: true
+      # 全サンプル軌跡の配信を無効化（負荷軽減）。採用経路は /local_plan で確認
+      visualize: false
       retry_attempt_limit: 1
       critics:
         - "ConstraintCritic"
@@ -115,16 +115,16 @@ controller_server:
       CostCritic.near_goal_distance: 1.0
       GoalCritic.enabled: true
       GoalCritic.cost_power: 1
-      GoalCritic.cost_weight: 5.0
-      GoalCritic.threshold_to_consider: 1.0
+      GoalCritic.cost_weight: 8.0
+      GoalCritic.threshold_to_consider: 1.5
       GoalAngleCritic.enabled: true
       GoalAngleCritic.cost_power: 1
-      GoalAngleCritic.cost_weight: 3.0
-      GoalAngleCritic.threshold_to_consider: 0.5
+      GoalAngleCritic.cost_weight: 6.0
+      GoalAngleCritic.threshold_to_consider: 1.0
       # PathAlignCritic: 横移動でパス上に乗る（use_path_orientations:false で向き強制しない）
       PathAlignCritic.enabled: true
       PathAlignCritic.cost_power: 1
-      PathAlignCritic.cost_weight: 14.0
+      PathAlignCritic.cost_weight: 10.0
       PathAlignCritic.max_path_occupancy_ratio: 0.05
       PathAlignCritic.trajectory_point_step: 3
       PathAlignCritic.threshold_to_consider: 0.5
@@ -162,7 +162,7 @@ bt_navigator:
     robot_base_frame: base_link
     odom_topic: /odom
     bt_loop_duration: 10
-    default_server_timeout: 20
+    default_server_timeout: 1000
     wait_for_service_timeout: 1000
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:

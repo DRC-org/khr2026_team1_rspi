@@ -1,591 +1,167 @@
 # ROS2 + LiDAR 自律走行 実装計画
 
-## 概要
+## 1. 概要・目標アーキテクチャ
 
-既存のロボット制御システム（4輪メカナムホイール + YDLiDAR）に自律走行機能を追加する。
-競技フィールドは毎回 ±5% の寸法誤差があるため、**試合前に毎回マッピング**を行い、
-その試合の実際のフィールド形状に合わせた地図を生成してから自律走行する。
-
----
-
-## 目標アーキテクチャ
+4輪メカナムホイールロボット（M3508 + YDLiDAR）に自律走行機能を追加する。
+試合前にルールブック寸法から合成 PGM マップを生成し、AMCL で自己位置推定して Nav2 で走行する。
 
 ```
 [目標位置指定]
   └── Bluetooth / WebSocket (JSON: {"type": "nav_goal", "waypoint": "goal_A"})
               ↓
-[routing_node]  ←── /map, slam_toolbox の自己位置
+[routing_node]  ←── /map, AMCL 自己位置
   ├── Nav2 ActionClient (NavigateToPose)
   └── /cmd_vel ──→ [cmd_vel_bridge_node] ──→ wheel_control ──→ [ESP32]
 
-[SLAM Toolbox (online_async)] ←── /scan_filtered, /odom ──→ /map, /tf(map→odom)
+[map_server]                  ──→ /map（合成 PGM）
+[amcl]                        ←── /scan_filtered, /odom ──→ map→odom TF
 [odometry_node]               ←── wheel_feedback ──→ /odom_raw
-[imu_publisher_node]          ←── wheel_feedback ──→ /imu
-[ekf_filter_node]             ←── /odom_raw, /imu ──→ /odom, /tf(odom→base_link)
+[imu_publisher_node]          ←── wheel_feedback ──→ /imu（起動時バイアスキャリブ後に配信）
+[ekf_filter_node]             ←── /odom_raw, /imu ──→ /odom, TF(odom→base_link)
 [YDLiDAR]                     ──→ /scan → [laser_filter] ──→ /scan_filtered
+[web_server_node]             ←→ bluetooth_rx/bluetooth_tx ←→ WebSocket (port 8080)
 ```
 
----
-
-## 競技運用フロー（フェーズ 8〜10 完成後）
+### 競技運用フロー
 
 ```
-① マッピング（試合前）
-   mapping_launch.py 起動 → Bluetooth/手動で一周走行
-   serialize_map → map_saver_cli（PGM も保存）
+① 合成マップ生成（フィールド寸法変更時のみ）
+   ros2 run auto_nav generate_field_map.py
+   → /home/pi/maps/field_synthetic.pgm + field_synthetic.yaml が生成される
 
-② ウェイポイント生成（マッピング直後、5秒程度）
-   python3 generate_waypoints.py --map field.pgm --meta field.yaml \
-     --relative waypoints_relative.yaml --output waypoints.yaml
+② 自律走行起動
+   ros2 launch auto_nav auto_nav_launch.py
+   （マップを明示指定する場合: map:=/home/pi/maps/field_synthetic.yaml）
 
-③ 本番起動
-   auto_nav_launch.py 起動（web_server_node も起動される）
+③ コート選択 → Web UI でコート（青/赤）を選択
+   → routing_node が AMCL に /initialpose を送信して自己位置を初期化
 
-④ コート選択 → Web UI でコート（青/赤）を選択
+④ 自動制御開始 → Web UI の「自動開始」ボタン → auto_sequence を実行
 
-⑤ 自動制御開始 → Web UI の「自動開始」ボタン → auto_sequence を実行
-
-⑥ フォールバック（自動制御不能時のみ）
+⑤ フォールバック（自動制御不能時）
    iPad を Bluetooth 接続 → 手動操縦モードに切り替え
 ```
 
 ---
 
-## 実装状況サマリー
+## 2. 現在のシステム構成
 
-| # | 内容 | 状態 | 主要ファイル | 実装日 |
-|---|------|------|------------|--------|
-| 1 | オドメトリノード | ✅ 完了 | `odometry_node.py` | 2026-02-21 |
-| 2 | cmd_vel ブリッジ | ✅ 完了 | `cmd_vel_bridge_node.py` | 2026-02-21 |
-| 3 | SLAM セットアップ | ✅ 完了 | `slam_mapping_params.yaml`, `slam_localization_params.yaml` | 2026-02-23 |
-| 4 | ウェイポイント管理 | ✅ 完了 | `generate_waypoints.py`, `waypoints_relative.yaml` | 2026-03-01 |
-| 5 | 自律走行ノード | ✅ 完了 | `routing_node.py` | 2026-02-27 |
-| 6 | Nav2 ナビゲーション | ✅ 完了 | `nav2_params.yaml` | 2026-02-25/27 |
-| 7 | ローンチファイル整備 | ✅ 完了 | `mapping_launch.py`, `auto_nav_launch.py` | 2026-02-21/25 |
-| 8 | Web コントロール | ✅ 完了 | `web_control/` パッケージ | 2026-03-02 |
-| 9 | 競技対応機能 | ✅ 完了 | `routing_node.py` | 2026-03-02 |
-| 10 | 壁基準 WP 自動生成 | ✅ 完了 | `generate_waypoints.py` | 2026-03-01 |
+### 2-1. ノード一覧（auto_nav_launch.py 起動時）
 
----
+| ノード | パッケージ | 役割 |
+|--------|-----------|------|
+| `micro_ros_agent_c` | micro_ros_agent | cwmc ESP32 ↔ ROS2 ブリッジ（/dev/esp32_c or UDP:8888） |
+| `micro_ros_agent_h` | micro_ros_agent | hwmc ESP32 ↔ ROS2 ブリッジ（/dev/esp32_h or UDP:8889） |
+| ydlidar_ros2_driver | ydlidar_ros2_driver | LiDAR /scan 配信 |
+| `static_tf_base_to_laser` | tf2_ros | base_link → laser_frame（yaw=1.5708, z=0.15m） |
+| `scan_to_scan_filter_chain` | laser_filters | /scan → /scan_filtered（0.33m未満除去） |
+| `odometry_node` | auto_nav | wheel_feedback → /odom_raw |
+| `imu_publisher_node` | auto_nav | wheel_feedback → /imu（LSM9DS1） |
+| `ekf_filter_node` | robot_localization | /odom_raw + /imu → /odom + TF(odom→base_link) |
+| `map_server` | nav2_map_server | 合成 PGM → /map（lifecycle） |
+| `amcl` | nav2_amcl | パーティクルフィルタ自己位置推定 → map→odom TF（lifecycle） |
+| `lifecycle_manager_localization` | nav2_lifecycle_manager | map_server + amcl のライフサイクル管理（8秒遅延起動） |
+| `controller_server` | nav2_controller | MPPI コントローラー（Omni モデル） |
+| `planner_server` | nav2_planner | NavfnPlanner（A*） |
+| `behavior_server` | nav2_behaviors | spin / backup / wait |
+| `bt_navigator` | nav2_bt_navigator | BT ツリーで NavigateToPose を管理 |
+| `lifecycle_manager_navigation` | nav2_lifecycle_manager | Nav2 ナビゲーションノードのライフサイクル管理 |
+| `routing_node` | auto_nav | Bluetooth/WS コマンド → NavigateToPose ActionClient |
+| `robot_control_node` | robot_control | Bluetooth 手動操縦 + ESP32 制御 |
+| `bt_communication_node` | bt_communication | Bluetooth GATT サーバー（bumble、.venv 分離） |
+| `web_server_node` | web_control | WebSocket ブリッジ（aiohttp、port 8080） |
+| `cmd_vel_bridge_node` | auto_nav | /cmd_vel → wheel_control（auto モード時のみ） |
 
-## フェーズ詳細
+**lifecycle_manager_localization は EKF が安定するまで 8 秒遅延起動する**（TF なしで AMCL が起動するとスキャンキューが溢れて LiDAR を一切処理できなくなるため）。
 
-### フェーズ 1: オドメトリノード ✅ 完了（2026-02-21）
-
-`wheel_feedback` から 4 輪メカナムの前進運動学で `/odom_raw` を配信する。
-`ekf_filter_node` が `/odom_raw` + `/imu` を融合して `/odom` と TF(`odom→base_link`) を配信する（EKF 導入: 2026-02-27）。
-
-**主要ファイル:**
-- `src/auto_nav/src/auto_nav/odometry_node.py`（`/odom_raw` 配信）
-- `src/auto_nav/src/auto_nav/imu_publisher_node.py`（`/imu` 配信）
-- `src/auto_nav/config/ekf_params.yaml`
-
-**注意点:**
-- `publish_rate` パラメータではなく `wheel_feedback` 受信レートで駆動（~20Hz）
-- 2026-02-26 に odometry_node.py に IMU gz 直接補正を追加したが、2026-02-27 の EKF 移行でその実装は削除済み。現在は `/odom_raw`（エンコーダのみ）+ EKF の構成
-- 静止時 IMU gz バイアスドリフト対策: `imu_publisher_node.py` が静止検出（エンコーダ omega < 0.01 rad/s）で gz 共分散を 0.01 → 10.0 に上げ EKF に無視させる（0.23°/秒 → 0.001°/秒）
-
----
-
-### フェーズ 2: cmd_vel ブリッジノード ✅ 完了（2026-02-21）
-
-`/cmd_vel` (Twist) → 逆運動学 → `wheel_control` (WheelMessage)。`/nav_mode` でモード切り替え。
-
-**主要ファイル:** `src/auto_nav/src/auto_nav/cmd_vel_bridge_node.py`
-
-**注意点:**
-- `auto → manual` 切り替え時にゼロ RPM 指令を送信（急停止防止）
-- `MIN_RPM = 700.0`: M3508 の静止摩擦を超えられず不動になる問題を解消。700 RPM ≈ 0.19m/s 相当（速すぎる場合は下げる）
-
----
-
-### フェーズ 3: SLAM セットアップ ✅ 完了（2026-02-23）
-
-**主要ファイル:**
-- `src/auto_nav/config/slam_mapping_params.yaml`（online_async マッピング）
-- `src/auto_nav/config/slam_localization_params.yaml`（localization モード）
-
-両ファイルとも `scan_topic: /scan_filtered` を使用（タイヤ映り込みフィルタ後）。
-
-**slam_toolbox ライフサイクル管理（重要）:**
-`ros2 lifecycle set` はデーモン経由で "Node not found" になるため `ros2 service call` を直接使う。
-
-```bash
-ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState '{transition: {id: 1}}'
-sleep 2
-ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState '{transition: {id: 3}}'
-```
-
-`mapping_launch.py` では `TimerAction(period=3.0) + ExecuteProcess` で自動化済み。
-
-**地図保存:**
-
-```bash
-# ※ mapping_launch.py 起動中（slam_toolbox が動いている間）に実行すること
-
-# [1] slam_toolbox ネイティブ形式（ローカリゼーション再開用）
-ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph \
-  "filename: '/home/pi/maps/field'"
-
-# [2] PGM 形式（generate_waypoints.py / map_server 用）
-# map_subscribe_transient_local:=true 必須（slam_toolbox は TRANSIENT_LOCAL で /map を配信）
-ros2 run nav2_map_server map_saver_cli -f /home/pi/maps/field \
-  --ros-args -p use_sim_time:=false -p map_subscribe_transient_local:=true
-```
-
-**ローカリゼーション起動:**
-```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field  # 拡張子なし
-```
-
-**注意点:**
-- `LaserScanFootprintFilter` は TF 変換でサイレント失敗するため不使用。`LaserScanRangeFilter` で 0.33m 未満を除去
-- `laser_filter_node` に `name=` を設定するとパラメータ読み込み失敗 → `name=` を削除してデフォルト名を使う
-- マッピングパラメータ（2026-02-27 調整済み）:
-
-| パラメータ | 値 | 理由 |
-|-----------|-----|------|
-| `link_match_minimum_response_fine` | 0.4 | 対角壁での重複描画防止 |
-| `loop_match_minimum_response_fine` | 0.55 | 低品質ループクロージャを棄却 |
-| `loop_match_maximum_variance_coarse` | 1.5 | 偽ループ候補を除外 |
-
----
-
-### フェーズ 4: ウェイポイント管理 ✅ 完了（2026-03-01）
-
-**主方針:** `generate_waypoints.py` でウェイポイントを自動生成する。
-`waypoints_relative.yaml` にフィールド壁からの相対距離でウェイポイントを事前定義し、マッピング後に自動変換する。
-
-**主要ファイル:**
-- `src/auto_nav/config/waypoints_relative.yaml`（相対座標定義）
-- `src/auto_nav/scripts/generate_waypoints.py`（変換スクリプト）
-- `src/auto_nav/config/waypoints.yaml`（生成された絶対座標、要 PGM マップ）
-
-**運用手順（マッピング後）:**
-```bash
-python3 src/auto_nav/scripts/generate_waypoints.py \
-  --map /home/pi/maps/field.pgm \
-  --meta /home/pi/maps/field.yaml \
-  --relative src/auto_nav/config/waypoints_relative.yaml \
-  --output src/auto_nav/config/waypoints.yaml
-
-# 確認のみ（ファイル書き出しなし）
-python3 ... --dry-run
-```
-
-詳細仕様（フォーマット・壁検出アルゴリズム）はフェーズ 10 を参照。
-
----
-
-### フェーズ 5: 自律走行ノード ✅ 完了（2026-02-27）
-
-Bluetooth / WebSocket コマンドを受け取り、Nav2 ActionClient でゴールを送信する制御ノード。
-
-**主要ファイル:**
-- `src/auto_nav/src/auto_nav/routing_node.py`
-- `src/auto_nav/scripts/launch_routing.py`
-
-**状態遷移:**
-```
-MANUAL ──nav_mode:auto──→ AUTO_IDLE ──nav_goal/start_auto──→ NAVIGATING
-  ↑                          ↑   ↑                                │
-  └──nav_mode:manual──────────┘   └── AUTO_IDLE ←── SEQUENCE ←───┘
-                                       ↑
-                              全ウェイポイント完了
-```
-
-**動作確認コマンド:**
-```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field transport:=udp4
-ros2 topic echo /bluetooth_tx
-ros2 topic pub /bluetooth_rx std_msgs/msg/String \
-  'data: "{\"type\": \"nav_mode\", \"mode\": \"auto\"}"' --once
-ros2 topic pub /bluetooth_rx std_msgs/msg/String \
-  'data: "{\"type\": \"nav_goal\", \"waypoint\": \"waypoint_1\"}"' --once
-```
-
-**重要: ActionClient + SingleThreadedExecutor 問題:**
-`ActionClient` 初期化時に Nav2 の `_action/status` トピックを受信する Waitable が登録され、`SingleThreadedExecutor` では bluetooth_rx コールバックが一切実行されなくなる。`MultiThreadedExecutor` を使うこと:
-```python
-from rclpy.executors import MultiThreadedExecutor
-executor = MultiThreadedExecutor()
-executor.add_node(node)
-executor.spin()
-```
-
----
-
-### フェーズ 6: Nav2 ナビゲーション ✅ 完了（2026-02-25/27）
-
-**主要ファイル:** `src/auto_nav/config/nav2_params.yaml`
-
-設定概要:
-- プランナー: NavfnPlanner（A*: `use_astar: true`, tolerance: 0.5m）
-- コントローラー: DWBLocalPlanner（メカナム対応: `max_vel_y: 0.5`, `vy_samples: 10`）
-- フットプリント: `[[0.22, 0.29], [-0.22, 0.29], [-0.22, -0.29], [0.22, -0.29]]`
-- コストマップ: `scan_topic: /scan_filtered`, `inflation_radius: 0.55m`
-
-**DWB チューニング結果（2026-02-27）:**
-
-| パラメータ | Before | After | 理由 |
-|-----------|--------|-------|------|
-| `general_goal_checker.xy_goal_tolerance` | 0.25 | 0.08 | ±8cm 精度目標 |
-| `general_goal_checker.yaw_goal_tolerance` | 0.25 | 0.10 | ±6° 精度目標 |
-| `FollowPath.max_vel_x` | 0.5 | 1.0 | 速度倍増 |
-| `FollowPath.max_speed_xy` | 0.5 | 1.0 | 速度倍増 |
-| `FollowPath.sim_time` | 1.7 | 1.2 | ふらつき抑制 |
-| `FollowPath.xy_goal_tolerance` | 0.25 | 0.08 | RotateToGoal トリガー精度 |
-| `FollowPath.PathAlign.scale` | 32.0 | 8.0 | ふらつきの主原因を除去 |
-| `velocity_smoother.max_velocity` | [0.5, 0.5, 1.0] | [1.0, 0.5, 1.0] | DWB 上限に合わせる |
-
-**Nav2 Jazzy 固有の注意点:**
-- `navigation_launch.py` が管理するノードは 10 個（`docking_server` など旧版にないノードを含む）。全ノードのパラメータを `nav2_params.yaml` に定義すること
-- `bt_navigator` の `plugin_lib_names` を明示するとビルトイン BT ノード ID が二重登録されて FATAL → 削除してデフォルト動作を使う
-- `collision_monitor`: `observation_sources` 未定義で configure 失敗 → params 追加で解決
-- `docking_server`: `dock_plugins` 未定義で configure 失敗 → params 追加で解決
-
----
-
-### フェーズ 7: ローンチファイル整備 ✅ 完了
-
-**主要ファイル:**
-- `src/auto_nav/launch/mapping_launch.py`
-- `src/auto_nav/launch/auto_nav_launch.py`
-
-**mapping_launch.py 起動ノード:**
-micro_ros_agent / ydlidar_ros2_driver / laser_filter_node / static_tf（base_link→laser_frame）
-/ odometry_node / imu_publisher_node / ekf_node / cmd_vel_bridge_node
-/ slam_toolbox / robot_control / bt_communication
-
-**起動コマンド:**
-```bash
-ros2 launch auto_nav mapping_launch.py                      # シリアル（デフォルト）
-ros2 launch auto_nav mapping_launch.py serial_port:=/dev/ttyUSB1  # USB1 の場合
-ros2 launch auto_nav mapping_launch.py transport:=udp4      # WiFi UDP
-ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field transport:=udp4
-```
-
-**注意:** `base_link → laser_frame` の static_tf は名前付き引数で設定。
-LiDAR 取付向き: `--yaw 1.5708`（0度方向がロボット左向き）、`--pitch 0.0 --roll 0.0`（上下反転取付だが pitch=π は左右鏡像を生じるため roll も 0 が正しい）。z=0.15m は仮設定のため実機実測で調整すること。
-
----
-
-### フェーズ 8: Web コントロールシステム（未実装）
-
-**背景:** 競技規則により試合中は一切の外部通信が禁止。Bluetooth コントローラは自動制御失敗時の手動フォールバック専用とし、通常運用は WebSocket 経由に移行する。
-
-**基本方針:** UI は既存の `khr2026_team1_bt_controller`（React + TypeScript + Vite）に **WebSocket 接続ページを追加**する。
+### 2-2. TF ツリー
 
 ```
-[khr2026_team1_bt_controller (ビルド済み SPA)]
-        ↕ WebSocket (ws://<raspi-ip>:8080/ws)
-[web_server_node（本リポジトリ: web_control パッケージ）]
-        ↕ bluetooth_rx / bluetooth_tx (std_msgs/String)
-[routing_node / robot_control]
+map
+ └── odom              ← AMCL が配信（set_court コマンド後に確立）
+      └── base_link    ← ekf_filter_node が配信（エンコーダ + IMU 融合）
+           └── laser_frame  ← static_tf（yaw=1.5708, pitch=0.0, roll=0.0, z=0.15m）
 ```
 
-オペレーターのスマホ/タブレットはラズパイの Wi-Fi AP に接続し、`http://<raspi-ip>:5173` または GitHub Pages の URL を開く。ラズパイ側は WebSocket サーバーのみ起動すればよい。
+`odometry_node` は `/odom_raw` のみ配信。`odom→base_link` TF は EKF が担当。
+set_court コマンドを受信するまで AMCL は `/initialpose` を受け取れず、`map→odom` TF を publish しない（正常動作）。
 
----
+### 2-3. 主要ファイル一覧
 
-#### 8-1: RPi 側 `web_control` パッケージ（新規）
-
-**責務:** WebSocket ブリッジのみ。HTTP 静的ファイル配信は行わない。
-
-**ディレクトリ構成:**
-```
-src/web_control/
-├── CMakeLists.txt
-├── package.xml
-├── pyproject.toml           ← uv 管理（aiohttp を追加）
-├── src/web_control/
-│   ├── __init__.py
-│   └── web_server_node.py
-└── scripts/
-    └── launch_web_server.py
-```
-
-**パッケージ作成手順（実装時）:**
-```bash
-cd src && ros2 pkg create web_control
-cd web_control
-uv init . --lib --python-preference only-system
-uv venv --system-site-packages
-uv add aiohttp
-```
-
-**web_server_node.py の動作仕様:**
-1. `aiohttp` で WebSocket サーバーをポート 8080 で起動（`ws://0.0.0.0:8080/ws`）
-2. 接続中の全クライアントをセットで管理し、ブロードキャスト
-3. `Access-Control-Allow-Origin: *` ヘッダーを HTTP Upgrade レスポンスに付与（GitHub Pages 等からの接続を許可）
-
-**asyncio + rclpy 統合方針:**
-- rclpy `MultiThreadedExecutor` でスピン（メインスレッド）
-- `aiohttp` の asyncio ループは `threading.Thread` + `asyncio.new_event_loop()` で別スレッドで起動
-- ROS2 コールバック → WebSocket: `asyncio.run_coroutine_threadsafe(broadcast(msg), loop)`
-- WebSocket → ROS2: `publisher.publish()`（rclpy の publish はスレッドセーフ）
-
-**ROS2 インターフェース:**
-- Sub: `bluetooth_tx` (String) → WebSocket 全クライアントにブロードキャスト
-- Pub: `bluetooth_rx` (String) ← WebSocket から受信したコマンドを転送
-
----
-
-#### 8-2: `khr2026_team1_bt_controller` リポジトリへの追加
-
-既存スタック（React 19 + TypeScript + Vite + Tailwind CSS 4 + React Router 7）をそのまま使用。
-
-**`src/hooks/useWebSocketConnect.tsx`（新規）** — `useBluetoothConnect.tsx` と同等のインターフェース:
-
-```typescript
-interface UseWebSocketConnectReturn {
-  isConnected: boolean
-  connect: (url: string) => Promise<void>   // 例: "ws://192.168.4.1:8080/ws"
-  disconnect: () => void
-  sendJson: (data: unknown) => void
-  lastMessage: unknown | null
-}
-```
-
-**`src/routes/Index.tsx`（変更）** — 以下のメニューを追加:
-
-| メニュー | 説明 |
+| ファイル | 説明 |
 |---------|------|
-| Controller（既存） | Bluetooth で手動コントロール |
-| PID Tuning（既存） | 足回り PID ゲイン調整 |
-| **Auto Nav（新規）** | **自律走行の制御・モニタリング（WebSocket）** |
-| **Controller (WS)（新規）** | **WebSocket 経由で手動コントロール（競技本番用）** |
+| `src/auto_nav/launch/auto_nav_launch.py` | 全ノード一括起動（AMCL ローカリゼーションモード） |
+| `src/auto_nav/src/auto_nav/odometry_node.py` | wheel_feedback → /odom_raw |
+| `src/auto_nav/src/auto_nav/imu_publisher_node.py` | wheel_feedback → /imu（起動時バイアスキャリブ） |
+| `src/auto_nav/src/auto_nav/cmd_vel_bridge_node.py` | /cmd_vel → wheel_control（ヨー PID 付き） |
+| `src/auto_nav/src/auto_nav/routing_node.py` | Bluetooth/WS → NavigateToPose、on_arrive、set_court |
+| `src/auto_nav/src/auto_nav/yagura_position_node.py` | /scan から矢倉位置検出 |
+| `src/auto_nav/scripts/generate_field_map.py` | field_dimensions.yaml → 合成 PGM/YAML 生成 |
+| `src/auto_nav/config/field_dimensions.yaml` | フィールド寸法・コート別初期位置 |
+| `src/auto_nav/config/waypoints.yaml` | ウェイポイント絶対座標（直接編集） |
+| `src/auto_nav/config/nav2_params.yaml` | Nav2 全パラメータ（MPPI + NavfnPlanner + AMCL lifecycle） |
+| `src/auto_nav/config/amcl_params.yaml` | AMCL パラメータ（OmniMotionModel） |
+| `src/auto_nav/config/ekf_params.yaml` | EKF パラメータ（robot_localization） |
+| `src/auto_nav/config/slam_mapping_params.yaml` | SLAM マッピング用パラメータ（参照用・現在は不使用） |
+| `src/auto_nav/config/slam_localization_params.yaml` | SLAM ローカリゼーション用パラメータ（参照用・現在は不使用） |
+| `src/web_control/src/web_control/web_server_node.py` | WebSocket ブリッジノード（aiohttp） |
+| `src/robot_control/src/robot_control/constants.py` | 運動学定数（正式定義） |
 
-**`src/routes/Controller.tsx`（変更）** — WebSocket 接続オプションを追加（`?mode=ws&url=ws://...` で接続手段を切り替え）。
-
-**新規ルート: `src/routes/AutoNav/`**
-
-```
-src/routes/AutoNav/
-├── index.tsx           ← AutoNav ページ本体
-├── useAutoNav.ts       ← WebSocket 接続 + 状態管理フック
-└── CourtSelector.tsx   ← コート選択コンポーネント
-```
-
-**`AutoNav/index.tsx` の UI 仕様:**
-- **接続セクション:** WebSocket URL 入力欄（デフォルト: `ws://192.168.4.1:8080/ws`）、接続/切断ボタン
-- **コート選択:** 「青コート」「赤コート」ボタン → `{"type": "set_court", "court": "blue"|"red"}` を送信
-- **制御:** 「自動開始」`{"type": "start_auto"}`、「停止」`{"type": "stop_auto"}`（誤タップ防止ダイアログ付き）
-- **ステータス:** モード表示、現在ウェイポイント名＋進捗（例: `1 / 3`）、フィールド SVG でロボット位置表示
-- **ログ:** `bluetooth_tx` から受信した `nav_status` メッセージを時系列表示（最新 20 件）
-
----
-
-#### 8-3: WebSocket メッセージプロトコル
-
-Bluetooth 版と完全に同一フォーマット。「共通リファレンス: Bluetooth/WebSocket コマンド仕様」を参照。
-`web_server_node` は `bluetooth_tx` の内容をそのままブラウザにブロードキャストするため、PID チューニング画面も WebSocket 接続で動作する。
-
----
-
-### フェーズ 9: 競技対応機能 ✅ 完了（2026-03-02）
-
-**変更ファイル:**
-- `src/auto_nav/src/auto_nav/routing_node.py`（on_arrive、start_auto/stop_auto、set_court、コート座標変換を追加）
-- `src/robot_control/src/robot_control/ros2_node.py`（hand_control を auto モードでも送信するよう変更）
-
-**追加機能:**
-
-| 機能 | 実装 |
-|------|------|
-| コート切り替え | `set_court` コマンドで `_current_court` を更新。赤コートは `(x, y, θ) → (-x, y, π-θ)` |
-| on_arrive シーケンス | Nav2 SUCCEEDED 後、on_arrive リストを別スレッドで順次実行 |
-| start_auto | `auto_sequence` の先頭から `_advance_auto_sequence` を開始 |
-| stop_auto | ゴールキャンセル + `_sequence_abort` Event でシーケンス中断 |
-
-**on_arrive の hand_control 転送フロー:**
-```
-routing_node._run_on_arrive_sequence
-  → _pub_rx.publish(bluetooth_rx: {"type": "hand_control", ...})
-  → robot_control.on_controller_command が受信
-  → send_control_command（auto モードでも hand_control は動作）が hwmc ESP32 に送信
-```
-
-**ros2_node.py の変更:** `wheel_control` の送信は `if self._nav_mode != "auto":` ブロック内に限定。`hand_control` の送信はブロック外（auto/manual 両モードで毎 50ms 送信）。
-
-**動作確認コマンド:**
-```bash
-ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field transport:=udp4
-ros2 topic echo /bluetooth_tx
-ros2 topic echo /hand_control
-
-# on_arrive テスト
-ros2 topic pub /bluetooth_rx std_msgs/String '{data: "{\"type\": \"nav_mode\", \"mode\": \"auto\"}"}' --once
-ros2 topic pub /bluetooth_rx std_msgs/String '{data: "{\"type\": \"nav_goal\", \"waypoint\": \"waypoint_1\"}"}' --once
-
-# start_auto テスト（全シーケンス）
-ros2 topic pub /bluetooth_rx std_msgs/String '{data: "{\"type\": \"start_auto\"}"}' --once
-
-# コート切り替えテスト
-ros2 topic pub /bluetooth_rx std_msgs/String '{data: "{\"type\": \"set_court\", \"court\": \"red\"}"}' --once
-```
-
----
-
-### フェーズ 12: 事前フィールドマップ + AMCL 自己位置推定への移行 ✅ 完了（2026-03-08）
-
-#### 概要
-
-毎回の物理マッピングを廃止し、ルールブック寸法から合成 PGM マップを生成して AMCL で自己位置推定するよう切り替えた。
-
-#### 変更ファイル
-
-| ファイル | 変更種別 | 内容 |
-|---------|---------|------|
-| `src/auto_nav/config/field_dimensions.yaml` | 新規 | フィールド寸法・コート別初期位置 |
-| `src/auto_nav/scripts/generate_field_map.py` | 新規 | field_dimensions.yaml → PGM/YAML 生成 |
-| `src/auto_nav/config/amcl_params.yaml` | 新規 | AMCL パラメータ（OmniMotionModel） |
-| `src/auto_nav/config/nav2_params.yaml` | 修正 | lifecycle_manager_localization セクション追加 |
-| `src/auto_nav/launch/auto_nav_launch.py` | 修正 | slam_toolbox/scan_relay 削除、map_server+amcl+lifecycle_manager_localization 追加 |
-| `src/auto_nav/src/auto_nav/routing_node.py` | 修正 | set_court 受信時に /initialpose を publish |
-
-#### 起動手順
+### 2-4. 起動コマンド
 
 ```bash
-# 1. 合成マップ生成（初回 + フィールド寸法変更時）
+# 合成マップ生成（初回 + フィールド寸法変更時）
 ros2 run auto_nav generate_field_map.py
-# → /home/pi/maps/field_synthetic.pgm + field_synthetic.yaml が生成される
 
-# 2. ウェイポイント再生成（新マップ座標系に合わせる）
-# ※ waypoints_relative.yaml を新座標系向けに更新してから実行
-python3 src/auto_nav/scripts/generate_waypoints.py \
-    --map /home/pi/maps/field_synthetic.pgm \
-    --meta /home/pi/maps/field_synthetic.yaml \
-    --relative src/auto_nav/config/waypoints_relative.yaml \
-    --output src/auto_nav/config/waypoints.yaml
-
-# 3. 自律走行起動
+# 自律走行起動（デフォルト: serial, マップ: field_synthetic.yaml）
 ros2 launch auto_nav auto_nav_launch.py
-# マップを明示指定する場合:
+
+# マップを明示指定
 ros2 launch auto_nav auto_nav_launch.py map:=/home/pi/maps/field_synthetic.yaml
-```
 
-#### 検証コマンド
+# WiFi UDP 接続
+ros2 launch auto_nav auto_nav_launch.py transport:=udp4
 
-```bash
-# AMCL 自己位置確認
-ros2 topic echo /amcl_pose
-
-# map→odom TF が配信されているか確認（AMCL が正常動作していれば map フレームが現れる）
-ros2 run tf2_tools view_frames
-
-# /map トピックが配信されているか確認
-ros2 topic echo --qos-reliability reliable /map nav_msgs/msg/OccupancyGrid --field info
-
-# lifecycle_manager_localization の状態確認
-ros2 service call /lifecycle_manager_localization/is_active std_srvs/srv/Trigger
-```
-
-#### 注意事項
-
-- `set_court` コマンドを送ると routing_node が `/initialpose` を publish して AMCL に初期位置を伝える
-  → 競技前に必ず `set_court` を実行すること
-- 初期位置は `field_dimensions.yaml` の `start_positions` セクションに定義。実機確認後に更新する
-- 合成マップの座標系（中心=(0,0)、青コート=+X）は旧 SLAM マップと異なる
-  → `waypoints_relative.yaml` を新座標系向けに見直す必要がある
-- `scan_relay_node`（slam_toolbox TF 遅延ハック）は不要になったため削除済み
-- `colcon build --cmake-force-configure` が必要だった（file(GLOB) のキャッシュ問題）
-
----
-
-### フェーズ 11: エラーアラートとシーケンス途中再開 ✅ 完了（2026-03-04）
-
-#### 「続行不可能」の定義
-
-`nav_status: "error"` 受信時（Nav2 が `STATUS_SUCCEEDED` / `STATUS_CANCELED` 以外を返した場合）。auto sequence 中・単発 nav_goal どちらの失敗でも点滅する。
-
-#### rspi 側 `routing_node.py`
-
-- `start_auto` コマンドに `from_index` フィールドを追加（省略時 = 0）
-- `from_index > 0` の場合: `_relocate_and_start()` を別スレッドで起動
-  1. 指定ウェイポイント座標を `/initialpose` に publish（slam_toolbox の再ローカライズ起点を更新）
-  2. 3 秒カウントダウン（1 秒ごとに `nav_status: "relocating"` を送信）
-  3. カウントダウン完了後にナビゲーション開始
-- `navigating` / `arrived` / `error` メッセージに `seq_index` / `seq_total` を追加
-- auto sequence 中の `arrived`（on_arrive 完了後）も `bluetooth_tx` に送信するよう変更
-
-#### bt_controller 側
-
-- `NavStatus` に `'RELOCATING'` を追加
-- `isAlertFlashing`: error 受信で true → resume/stop/manual で false
-- `failedSeqIndex`: エラーが発生したシーケンスインデックスを保持
-- `relocatingCountdown`: カウントダウン残り秒数
-- `sendStartAutoFrom(fromIndex)`: `{"type": "start_auto", "from_index": N}` を送信
-- 点滅オーバーレイ: `fixed inset-0 z-40 pointer-events-none`、赤 ↔ 白を 500ms 間隔で切り替え
-- シーケンスリスト: 各ウェイポイント行に「ここから」ボタン。失敗行はオレンジ強調・完了行は取り消し線
-- `from_index > 0` 時: 「ロボットを waypoint_N の位置に置きましたか？」確認ダイアログを表示
-
-#### 競技時のリトライフロー
-
-```
-① エラー発生 → 画面が赤白点滅（point-events-none なのでボタン操作は継続可）
-② オペレーター: 「停止」ボタン → 手動でロボットを対象ウェイポイント位置に移動
-③ シーケンスリストで失敗行（オレンジ）の「ここから」ボタンを押す
-④ 確認ダイアログ → OK
-⑤ rspi が /initialpose を publish → 3 秒カウントダウン（UI に残り秒表示）
-⑥ ナビゲーション再開（点滅も停止）
+# デバッグログ有効化
+ros2 launch auto_nav auto_nav_launch.py debug:=true
 ```
 
 ---
 
-### フェーズ 10: 壁基準ウェイポイント生成 ✅ 完了（2026-03-01）
+## 3. フィールド・座標系・ウェイポイント
 
-マッピング後にスクリプトで `waypoints_relative.yaml`（壁からの相対距離定義）を
-`waypoints.yaml`（絶対座標）に自動変換する。±5% の寸法誤差は PGM マップに自動反映される。
+### 3-1. フィールド座標系（確定）
 
-**主要ファイル:**
-- `src/auto_nav/config/waypoints_relative.yaml`
-- `src/auto_nav/scripts/generate_waypoints.py`
+- 原点 (0,0): フィールド南西端外壁外側の交点
+- +X = 東（青コート側）、+Y = 北、フィールド中心軸は X=0
+- 赤コート = 左（-X）、青コート = 右（+X）。北南線（X=0）で線対称
+- 赤ロボット: 左下スタート、北（+Y）向き（`yaw: 1.5708`）
+- 青ロボット: 右下スタート、南（-Y）向き（`yaw: -1.5708`）
 
-**処理フロー:**
-1. PIL で PGM を読み込み（P2/P5 両対応、Pillow 不要。純粋 Python で実装）
-2. `field.yaml` から `resolution`、`origin` を取得
-3. 占有閾値（`field.yaml` の `occupied_thresh` から自動計算）以上のピクセルを壁と判定。各行/列の `statistics.median` でノイズ除去して壁外縁座標を検出
-4. 相対定義を絶対座標に変換（例: `from_wall=south, distance=0.5` → `y = wall_south_y + 0.5`）
-5. `waypoints.yaml` に書き出し（routing_node がそのまま読める）
+### 3-2. コート変換（routing_node.py `_apply_court_transform`）
 
-**壁検出の前提:** ロボットがフィールド全周を走行して壁が途切れていないことが必要。`--dry-run` で検出結果を目視確認すること。
+- 青（デフォルト）: そのまま `(x, y, θ)`
+- 赤: X反転 `(-x, y, π-θ)` ← **縦線（北南線）対称が正しい。旧実装の `(x, -y, -θ)` はバグだったため 2026-03-03 に修正済み**
 
----
+### 3-3. フィールド寸法（field_dimensions.yaml 記載値）
 
-## 共通リファレンス
+| 項目 | 値 |
+|------|-----|
+| 全幅（東西、外寸） | 6.962 m |
+| 全高（南北、外寸） | 7.0 m |
+| 壁厚 | 0.038 m |
+| PGM 解像度 | 0.05 m/cell |
+| PGM 原点 X | -3.481 m（南西端外壁外側） |
+| PGM 原点 Y | 0.0 m（南端外壁外側） |
 
-### Bluetooth / WebSocket コマンド仕様
+**コート別スタート位置:**
 
-**ロボットへの送信:**
+| コート | x | y | yaw |
+|--------|---|---|-----|
+| blue（右） | 3.143 | 0.288 | -1.5708（南向き） |
+| red（左） | -3.143 | 0.288 | 1.5708（北向き） |
 
-| type | フィールド | 説明 |
-|------|-----------|------|
-| `nav_mode` | `mode: "auto"\|"manual"` | ナビゲーションモード切り替え |
-| `nav_goal` | `waypoint: string` | ウェイポイント名でゴール指定 |
-| `nav_goal` | `x, y, theta: float` | 直接座標でゴール指定 |
-| `set_court` | `court: "blue"\|"red"` | コート選択（赤コートは Y 軸反転） |
-| `start_auto` | — | `auto_sequence` を先頭から実行 |
-| `stop_auto` | — | 自動制御停止（シーケンス中断） |
-| `joystick` | `l_x, l_y, r: int (-10〜10)` | 手動走行 |
-| `hand_control` | `target, control_type, action` | ハンド操作 |
-| `pid_gains` | `kp, ki, kd: float` | PID ゲイン調整 |
-
-**ロボットからの受信（`bluetooth_tx`）:**
-
-| 発生元 | type / フィールド | 説明 |
-|--------|-------------|------|
-| routing_node | `nav_status: "mode"`, `mode` | モード変更通知 |
-| routing_node | `nav_status: "navigating"`, `waypoint`, `progress` | 走行中（例: `"1/3"`） |
-| routing_node | `nav_status: "arrived"`, `waypoint`, `progress` | 到達通知（on_arrive 完了後） |
-| routing_node | `nav_status: "completed"` | 全 auto_sequence 完了 |
-| routing_node | `nav_status: "cancelled"` | キャンセル通知 |
-| routing_node | `nav_status: "error"`, `message` | エラー通知 |
-| robot_control | `m3508_rpms`, `yagura`, `ring`, ... | フィードバック |
-
----
-
-### waypoints.yaml フォーマット（on_arrive 対応版）
+### 3-4. waypoints.yaml フォーマット（on_arrive 対応版）
 
 ```yaml
 auto_sequence:
@@ -594,9 +170,9 @@ auto_sequence:
 
 waypoints:
   waypoint_1:
-    x: -0.677
-    y: 1.275
-    theta: 0.0
+    x: 1.404       # フィールド座標 [m]、青コート基準
+    y: 0.25
+    theta: -1.5707  # ロボット向き [rad]（0=東、π/2=北、-π/2=南）
     on_arrive:
       - action: hand_control
         target: yagura_1
@@ -604,22 +180,18 @@ waypoints:
         action_value: up
       - action: wait
         duration: 1.5
-      - action: hand_control
-        target: ring_1
-        control_type: state
-        action_value: open
   waypoint_2:
-    x: -1.859
-    y: 2.419
-    theta: 0.0
+    x: 1.703
+    y: 6.712
+    theta: -1.5707
     on_arrive: []
 ```
 
-**`on_arrive` で使えるアクション種別:**
+**`on_arrive` アクション種別:**
 
 | action | 必須フィールド | 説明 |
 |--------|-------------|------|
-| `hand_control` | `target, control_type, action_value` | `bluetooth_rx` に手動制御コマンドを発行 |
+| `hand_control` | `target, control_type, action_value` | bluetooth_rx に手動制御コマンドを発行 |
 | `wait` | `duration` (秒) | 指定秒数待機（50ms チェック付き中断可能スリープ） |
 
 **`target`:** `yagura_1`, `yagura_2`, `ring_1`, `ring_2`
@@ -633,97 +205,167 @@ waypoints:
 
 ---
 
-### waypoints_relative.yaml フォーマット
+## 4. 主要パラメータ
 
-```yaml
-# 方角の定義:
-#   north: マッピング開始時にロボットが向いていた方向の壁
-#   south: その反対の壁、east: ロボットの右側、west: ロボットの左側
-auto_sequence:
-  - waypoint_1
-  - waypoint_2
+### 4-1. Nav2 パラメータ（nav2_params.yaml）
 
-waypoints:
-  waypoint_1:
-    from_wall: south
-    distance: 0.5         # 壁面（内側面）からの距離 [m]
-    cross_wall: west
-    cross_distance: 1.0
-    theta: 1.57
-    on_arrive:
-      - action: hand_control
-        target: ring_1
-        control_type: state
-        action_value: open
+**コントローラー: MPPI（Omni モデル）**
+
+| パラメータ | 値 | 説明 |
+|-----------|-----|------|
+| `controller_frequency` | 5.0 Hz | Raspberry Pi 負荷に合わせた設定 |
+| `batch_size` | 300 | 軌跡サンプル数（負荷軽減のため削減） |
+| `time_steps` | 15 | 予測ホライズン（0.2s×15=3.0s） |
+| `model_dt` | 0.2 | コントローラー周期と一致させる |
+| `visualize` | false | /trajectories 配信無効（負荷軽減） |
+| `vx_max` | 2.5 | 前後最大速度 [m/s] |
+| `vy_max` | 1.5 | 左右最大速度 [m/s]（メカナム横移動） |
+| `wz_max` | 3.5 | 回転最大角速度 [rad/s] |
+
+**ゴールチェッカー:**
+
+| パラメータ | 値 | 説明 |
+|-----------|-----|------|
+| `xy_goal_tolerance` | 0.15 m | 位置精度目標 |
+| `yaw_goal_tolerance` | 0.20 rad | 角度精度目標（~11°） |
+
+**bt_navigator:**
+
+| パラメータ | 値 | 理由 |
+|-----------|-----|------|
+| `default_server_timeout` | 1000 ms | CPU 処理落ち時の猶予（旧値 20ms で controller_server タイムアウト多発） |
+
+**フットプリント:** `[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]`（中心→前後 0.25m、中心→左右 0.29m）
+
+**グローバルプランナー:** NavfnPlanner（A*: `use_astar: true`, tolerance: 0.5m）
+
+**コストマップ:** `/scan_filtered` を使用、`inflation_radius: 0.40m`
+
+### 4-2. AMCL パラメータ（amcl_params.yaml）
+
+| パラメータ | 値 | 説明 |
+|-----------|-----|------|
+| `robot_model_type` | OmniMotionModel | 全方向移動ロボット用 |
+| `min_particles` | 500 | 最小パーティクル数 |
+| `max_particles` | 2000 | 最大パーティクル数 |
+| `update_min_d` | 0.15 m | 更新トリガー（並進） |
+| `update_min_a` | 0.10 rad | 更新トリガー（回転、~5.7°） |
+| `z_rand` | 0.05 | ランダムノイズ割合（合成マップ向け低値） |
+| `scan_topic` | scan_filtered | タイヤ映り込み除去済みスキャン |
+
+**set_initial_pose: true** に設定してあるため、set_court コマンド前でも原点付近に初期化される（Nav2 が起動できる状態を保つため）。
+
+### 4-3. 運動学定数（constants.py / odometry_node.py / cmd_vel_bridge_node.py 共通）
+
+```
+WHEEL_RADIUS = 0.04925 m
+GEAR_RATIO   = 19.20320855614973
+L_X = 0.1725 m（前後方向: ロボット中心 → タイヤ中心）
+L_Y = 0.2425 m（左右方向: ロボット中心 → タイヤ中心）
+G   = L_X + L_Y = 0.415 m
 ```
 
-**コート対称軸の前提:** 赤コートの Y 軸反転はマッピング開始時のロボット向きを X 軸としている。マッピング時は必ずフィールド中央線に正対して配置すること。
-
----
-
-### TF ツリー構成
+**逆運動学**（cmd_vel_bridge_node.py、ROS標準座標系: Vy>0=左）:
 
 ```
-map
- └── odom                      ← slam_toolbox が配信（~9.5Hz）
-      └── base_link            ← ekf_filter_node が配信（robot_localization、~17Hz）
-           └── laser_frame     ← static_tf（yaw=1.5708, pitch=0.0, roll=0.0, z=0.15m）
+v_fl = +Vx - Vy - G*ω
+v_fr = -Vx - Vy - G*ω
+v_rl = +Vx + Vy - G*ω
+v_rr = -Vx + Vy - G*ω
 ```
 
-`odometry_node` は `/odom_raw` のみ配信。`odom→base_link` TF は EKF が担当。
+**前進運動学**（odometry_node.py）:
+
+```
+Vx    = ( v_fl - v_fr + v_rl - v_rr) / 4
+Vy    = -( v_fl + v_fr - v_rl - v_rr) / 4
+omega = -(v_fl + v_fr + v_rl + v_rr) / (4 * G)
+```
+
+FR/RR の wheel_feedback RPM は取付向きの符号反転がそのまま返るため、変換式に追加の符号処理は不要。
+
+**MIN_RPM = 300.0**（M3508 静止摩擦対策。 ≈ 0.08 m/s）
 
 ---
 
-### センサフュージョン改善メモ
+## 5. Bluetooth / WebSocket コマンド仕様
 
-現状の EKF + AMCL 構成は動作するが、以下の改善余地がある。
+### ロボットへの送信（bluetooth_rx）
 
-1. **IMU 加速度の有効化**（優先度: 中）
-   - 現状: `ax`, `ay` は単位未確認（mg か m/s² か不明）のため無効
-   - 改善: `ros2 topic echo /imu` で raw 値を確認し単位を特定したうえで `ekf_params.yaml` の `imu0_config` を有効化
-   - 効果: 急加速・急停止時のオドメトリ精度向上
+| type | フィールド | 説明 |
+|------|-----------|------|
+| `nav_mode` | `mode: "auto"\|"manual"` | ナビゲーションモード切り替え |
+| `nav_goal` | `waypoint: string` | ウェイポイント名でゴール指定 |
+| `nav_goal` | `x, y, theta: float` | 直接座標でゴール指定 |
+| `set_court` | `court: "blue"\|"red"` | コート選択（AMCL に /initialpose を送信） |
+| `start_auto` | `from_index?: int` | auto_sequence を指定インデックスから実行（省略時=0） |
+| `stop_auto` | — | 自動制御停止（シーケンス中断） |
+| `joystick` | `l_x, l_y, r: int (-10〜10)` | 手動走行 |
+| `hand_control` | `target, control_type, action` | ハンド操作 |
+| `pid_gains` | `kp, ki, kd: float` | PID ゲイン調整 |
 
-2. **IMU orientation の差分利用**（優先度: 低）
-   - 現状: 磁気干渉で orientation（絶対方位）が不正確なため無効
-   - 改善: `imu0_differential: true` に変更すると絶対方位ではなく角度変化量として使えるため、干渉の影響を受けにくくなる可能性がある
-   - 効果: vyaw の精度向上（現在は vyaw のみ使用中）
+### ロボットからの受信（bluetooth_tx）
 
-3. **AMCL 更新トリガーを細かくする**（優先度: 中）
-   - 現状: `update_min_d: 0.25`（25cm）, `update_min_a: 0.349`（20°）
-   - 改善: `update_min_d: 0.10〜0.15` に下げる
-   - 効果: 位置推定の追従が速くなる（CPU 負荷とのトレードオフ）
-
-4. **AMCL の z_rand を下げる**（優先度: 低）
-   - 現状: `z_rand: 0.4`（ビームの 40% をランダムノイズとして扱う）
-   - 改善: 合成 PGM（壁のみの理想マップ）では `0.2〜0.3` が適切
-   - 効果: パーティクルの収束が速くなる
-
----
-
-### リスクと注意点
-
-1. **オドメトリ精度**: メカナムホイールはスリップしやすい。マッピング中は 0.2m/s 以下で走行すること。
-2. **手動/自動モード競合**: manual 時は robot_control が、auto 時は cmd_vel_bridge が wheel_control をパブリッシュ。両方が同時にパブリッシュしないようモード切り替えロジック実装済み。
-3. **LiDAR 取付位置の TF**: `laser_frame` のズレはコストマップ精度に直結する。z=0.15m は仮設定のため実機で計測して確認すること。
-4. **YDLiDAR のデッドゾーン**: 0.1m 以内はデッドゾーン。フットプリントにマージンを持たせること。
-5. **ウェイポイント管理**: `generate_waypoints.py` で自動生成。手動調整が必要な場合は `waypoints.yaml` を直接編集する。
-6. **Nav2 のメカナムホイール対応**: DWB で Y 方向速度を有効化済み（`max_vel_y`, `vy_samples`）。
-7. **LiDAR タイヤ映り込み**: `LaserScanRangeFilter` で 0.33m 未満を除去（`/scan_filtered`）。
-8. **コート対称軸の前提**: 赤コートの Y 軸反転はマッピング開始時のロボット向きを X 軸としている。マッピング時は必ずフィールド中央線に正対して配置すること。
-9. **asyncio + rclpy の統合**: web_server_node は aiohttp の asyncio ループと rclpy のループを別スレッドで動かす。`asyncio.run_coroutine_threadsafe` / スレッドセーフ publish 以外での跨ぎ操作は禁止。
-10. **on_arrive 実行中のブロッキング**: `time.sleep` を rclpy メインスレッドで呼ぶとコールバックが止まる。on_arrive シーケンスは専用スレッドで実行すること。
-11. **壁検出の前提**: `generate_waypoints.py` はロボットがフィールド全周を走行して壁が途切れていないことを前提とする。
+| 発生元 | フィールド | 説明 |
+|--------|-----------|------|
+| routing_node | `nav_status: "mode"`, `mode` | モード変更通知 |
+| routing_node | `nav_status: "navigating"`, `waypoint`, `seq_index`, `seq_total` | 走行中 |
+| routing_node | `nav_status: "arrived"`, `waypoint`, `seq_index`, `seq_total` | 到達通知（on_arrive 完了後） |
+| routing_node | `nav_status: "completed"` | 全 auto_sequence 完了 |
+| routing_node | `nav_status: "cancelled"` | キャンセル通知 |
+| routing_node | `nav_status: "error"`, `message`, `seq_index`, `seq_total` | エラー通知 |
+| routing_node | `nav_status: "relocating"`, `countdown`, `waypoint`, `seq_index`, `seq_total` | TF 確立待ち（最大30秒） |
+| routing_node | `nav_status: "court_set"`, `court` | コート設定完了通知 |
+| routing_node | `type: "robot_pos"`, `x`, `y`, `angle` | ロボット位置（5Hz、単位: mm・deg） |
+| robot_control | `m3508_rpms`, `yagura`, `ring`, ... | フィードバック |
 
 ---
 
-### 必要パッケージ
+## 6. 既知の問題・注意事項
+
+1. **LiDAR 取付位置の TF**: z=0.15m は仮設定。実機で計測して `auto_nav_launch.py` の static_tf を更新すること。
+
+2. **AMCL 初期位置**: set_court コマンドを送ると routing_node が `/initialpose` を publish して AMCL に初期位置を伝える。競技前に必ず `set_court` を実行すること。start_auto 実行時も from_index に関わらず initialpose を送信し、map→odom TF が確立されるまで最大 30 秒待機する。
+
+3. **メカナムホイールのスリップ**: スリップが多いとオドメトリ精度が悪化し AMCL 収束が遅くなる。可能な限りゆっくり走行すること。
+
+4. **IMU gz バイアスキャリブレーション**: imu_publisher_node は起動時に静止状態で ~5 秒間 gz サンプルを収集してバイアスを推定する。起動直後は静止させること。キャリブレーション完了まで EKF は /odom_raw のみで動作する。
+
+5. **IMU 加速度の有効化（未実施）**: LSM9DS1 の `ax`, `ay` は g 単位で m/s² 変換済みで配信しているが、EKF への入力は無効のまま（`imu0_config` で false）。有効化すると急加速時の精度が向上する可能性があるが、未検証。
+
+6. **AMCL 更新頻度**: `update_min_d: 0.15`, `update_min_a: 0.10`（すでに改善済み）。さらに下げると CPU 負荷が増加する。
+
+7. **on_arrive 実行中のブロッキング**: `time.sleep` を rclpy メインスレッドで呼ぶとコールバックが止まる。on_arrive シーケンスは専用スレッドで実行済み。
+
+8. **手動/自動モード競合**: manual 時は robot_control が、auto 時は cmd_vel_bridge が wheel_control をパブリッシュ。`auto → manual` 切り替え時に cmd_vel_bridge がゼロ RPM を送信して急停止を防ぐ。
+
+9. **asyncio + rclpy 統合**: web_server_node は aiohttp の asyncio ループと rclpy のループを別スレッドで動かす。`asyncio.run_coroutine_threadsafe` / スレッドセーフ publish 以外での跨ぎ操作は禁止。
+
+10. **YDLiDAR のデッドゾーン**: 0.1m 以内はデッドゾーン。`LaserScanRangeFilter` で 0.33m 未満を除去（タイヤ映り込み対策も兼ねる）。`LaserScanFootprintFilter` は TF 変換でサイレント失敗するため不使用。
+
+11. **laser_filter_node の name= 禁止**: `name=` を設定するとパラメータ読み込み失敗 → `name=` を削除してデフォルト名を使う。
+
+12. **auto モードでの hand_control**: hand_control の送信は auto/manual 両モードで動作する（robot_control の wheel_control 送信のみ auto モード時にスキップ）。
+
+13. **Nav2 ナビゲーション失敗時のリトライ**: auto sequence 中に Nav2 が失敗した場合、最大 5 回まで 3 秒間隔でリトライする。全リトライ後に error を送信する。
+
+14. **colcon build --cmake-force-configure**: `file(GLOB)` でスクリプトを追加した際はキャッシュクリアが必要な場合がある。
+
+### センサフュージョン改善メモ（今後の課題）
+
+1. **IMU 加速度の有効化**（優先度: 中）: `ros2 topic echo /imu` で raw 値を確認し単位を実測したうえで `ekf_params.yaml` の `imu0_config` を有効化。急加速・急停止時のオドメトリ精度向上が期待できる。
+
+2. **IMU orientation の差分利用**（優先度: 低）: 磁気干渉で orientation が不正確なため現在は無効。`imu0_differential: true` に変更すると干渉の影響を受けにくくなる可能性がある。
+
+---
+
+## 7. 必要パッケージ
 
 ```bash
 sudo apt install \
   ros-jazzy-slam-toolbox \
   ros-jazzy-nav2-bringup \
   ros-jazzy-nav2-msgs \
-  ros-jazzy-dwb-core \
   ros-jazzy-tf2-ros \
   ros-jazzy-tf2-tools \
   ros-jazzy-nav2-map-server \
@@ -731,67 +373,94 @@ sudo apt install \
   ros-jazzy-robot-localization
 ```
 
+### web_control セットアップ（初回のみ）
+
+```bash
+cd /home/pi/DRC/khr2026_team1_rspi/src/web_control
+uv venv --system-site-packages
+uv add aiohttp
+cd /home/pi/DRC/khr2026_team1_rspi
+colcon build --packages-select web_control --symlink-install
+source install/setup.bash
+```
+
 ---
 
-## 作業記録
+## 8. よく使うデバッグコマンド
 
-### 2026-02-21
-- `auto_nav` パッケージ新規作成（フェーズ 1, 2）
-- `odometry_node.py`: wheel_feedback → /odom + TF(odom→base_link)
-- `cmd_vel_bridge_node.py`: /cmd_vel → wheel_control、/nav_mode でモード切り替え
-- `mapping_launch.py` 作成（serial_port 引数でポート変更可能）
+```bash
+# AMCL 自己位置確認
+ros2 topic echo /amcl_pose
 
-### 2026-02-22
-- /odom 配信 20Hz、モード切り替え正常確認
-- scripts/*.py に実行権限がなかった → `chmod +x` で修正（以後スクリプト追加時は要注意）
-- `LaserScanRangeFilter` で /scan_filtered 実装（LaserScanFootprintFilter は TF 変換でサイレント失敗するため不使用）
-- slam_toolbox ライフサイクル問題解決: `ros2 service call /slam_toolbox/change_state` を直接呼び出し（デーモン経由不可）
+# map→odom TF 確認（AMCL が正常動作していれば map フレームが現れる）
+ros2 run tf2_tools view_frames
 
-### 2026-02-23
-- コードレビュー修正（slam params の enable_interactive_mode/do_loop_closing、odometry_node の theta 積分順序修正・共分散行列設定）
-- 実機マッピング成功: 1149×540 cells、field.posegraph (19MB) + field.data (8.9MB) 生成
+# /map トピック確認
+ros2 topic echo --qos-reliability reliable /map nav_msgs/msg/OccupancyGrid --field info
 
-### 2026-02-25
-- `nav2_params.yaml` 新規作成（フェーズ 6）
-- `auto_nav_launch.py` に Nav2 組み込み（navigation_launch.py 経由）
-- Nav2 Jazzy 固有のトラブル解決: plugin_lib_names の二重登録、docking_server/collision_monitor のパラメータ追加
+# lifecycle_manager_localization 状態確認
+ros2 service call /lifecycle_manager_localization/is_active std_srvs/srv/Trigger
 
-### 2026-02-26
-- laser_frame TF の yaw/pitch 設定バグ修正（位置引数 → 名前付き引数）
-- **IMU gz 直接補正を odometry_node.py に追加（暫定）** → 翌日 EKF 移行により当該実装を削除
+# nav_mode 切り替え
+ros2 topic pub /nav_mode std_msgs/String "data: 'auto'" --once
+ros2 topic pub /nav_mode std_msgs/String "data: 'manual'" --once
 
-### 2026-02-27
-- **EKF センサフュージョン導入（フェーズ 1 更新）**: odometry_node.py から IMU 融合・TF 配信を除去し `/odom_raw` のみに変更。imu_publisher_node.py（新規）+ ekf_params.yaml（新規）を追加。静止時 IMU gz バイアス対策として静止検出で gz 共分散を上げる実装を追加（0.23°/秒 → 0.001°/秒）
-- SLAM マッピングパラメータ調整（対角壁重複描画・二重壁解消）
-- **routing_node.py 実装（フェーズ 5）**: ActionClient + SingleThreadedExecutor で bluetooth_rx コールバックが無音になる問題 → MultiThreadedExecutor に変更で解決
-- DWB チューニング + MIN_RPM=700 追加（フェーズ 6 詳細参照）
-- フェーズ 8〜10 の要件・実装方針を策定
+# routing_node テスト
+ros2 topic echo /bluetooth_tx
+ros2 topic pub /bluetooth_rx std_msgs/msg/String \
+  'data: "{\"type\": \"nav_mode\", \"mode\": \"auto\"}"' --once
+ros2 topic pub /bluetooth_rx std_msgs/msg/String \
+  'data: "{\"type\": \"set_court\", \"court\": \"blue\"}"' --once
+ros2 topic pub /bluetooth_rx std_msgs/msg/String \
+  'data: "{\"type\": \"start_auto\"}"' --once
 
-### 2026-03-01
-- **フェーズ 10**: `generate_waypoints.py` + `waypoints_relative.yaml` 実装（PGM 純粋 Python 読み込み、P2/P5 両対応、`--dry-run` オプション付き）
+# WS ブリッジ確認
+ros2 topic echo /bluetooth_rx
+ros2 topic pub /bluetooth_tx std_msgs/String '{data: "{\"nav_status\": \"test\"}"}' --once
 
-### 2026-03-03
-- **手動制御コート選択機能追加**: `Controller.tsx` にコート選択ボタン（青/赤）を追加
-  - 青コート選択時: l_x・l_y を符号反転（ロボットが南向きのため、北を前にするための 180° 回転）
-  - 赤コート選択時: 変換なし（ロボットが北向きのため、そのまま）
-  - コート選択時に `set_court` コマンドを送信（manual→auto 切替時に routing_node と同期）
-  - UI: BT 接続ボタン横に「青」「赤」ボタンを追加
+# cmd_vel テスト（auto モード時）
+ros2 topic pub /cmd_vel geometry_msgs/Twist \
+  "{linear: {x: 0.2, y: 0.0, z: 0.0}, angular: {z: 0.0}}" --once
 
-- **バグ修正**: `routing_node.py` の `_apply_court_transform` の赤コート変換が誤り
-  - 誤: `(x, -y, -θ)` ← 東西線（横線）対称になっていた
-  - 正: `(-x, y, π-θ)` ← 南北線（縦線）対称
-  - フィールドは赤（左）・青（右）コートが横並び、北南線で線対称。X軸反転が正しい
-  - θ 変換: 縦線反転では `π - θ`（東向き→西向き、北向き→北向きのまま）
+# MPPI 動作確認（5Hz 付近で安定出力されていれば OK）
+ros2 topic hz /cmd_vel
+
+# yagura_position_node 確認
+ros2 topic echo /yagura_position
+```
+
+---
+
+## 9. 作業記録（最新が上）
+
+### 2026-03-09
+
+- **MPPI 負荷軽減 & bt_navigator タイムアウト緩和**（`nav2_params.yaml`）
+  - **原因**: MPPI 計算量が Raspberry Pi の処理限界を超え、`bt_navigator` が 20ms タイムアウト内に `controller_server` から応答を受け取れず `follow_path` アクションが中断される不具合
+  - **対応**:
+    - `default_server_timeout`: 20 → 1000 ms（CPU 処理落ち時の猶予）
+    - `batch_size`: 800 → 300（Raspberry Pi の処理能力に合わせた上限）
+    - `time_steps`: 30 → 15（ホライズン 6.0s → 3.0s）
+    - `visualize`: true → false（/trajectories 配信を無効化、負荷軽減）
+    - `model_dt` は 0.2 のまま維持（controller_frequency=5Hz 相当）
+  - **計算量**: `800×30 = 24,000` → `300×15 = 4,500` 回/ループ（約 1/5）
+  - ビルド不要（yaml のみ変更）
+
+  確認コマンド:
+  ```bash
+  ros2 launch auto_nav auto_nav_launch.py
+  ros2 topic pub /nav_mode std_msgs/String "data: 'auto'" --once
+  ros2 topic hz /cmd_vel  # 5Hz 付近で安定出力されていれば OK
+  ```
 
 ### 2026-03-08（3回目）
 
 - **`cmd_vel_bridge_node.py` の逆運動学 `vy` 符号バグ修正**
   - **原因**: Nav2 が `/cmd_vel` に出力する `vy > 0`（ROS標準=左移動）に対して、逆運動学式の `vy` 符号が逆だった
-    - `vx=0, vy=+1` を入力すると `v_fl=+1, v_fr=+1, v_rl=-1, v_rr=-1` → odomの前進運動学で Vy_actual = -1（右移動）
+    - `vx=0, vy=+1` を入力すると `v_fl=+1, v_fr=+1, v_rl=-1, v_rr=-1` → odom の前進運動学で Vy_actual = -1（右移動）
     - Nav2 が経路補正のため「左へ」と指令するほどロボットは右へ逸れ、誤差が拡大して壁に激突していた
-  - **なぜ手動モードで気づかなかったか**: `m3508.py` が内部で `vy = -rotated_velocity.y` と反転しているため、
-    手動モードではジョイスティック入力が偶然に正しく動作していた（符号反転の二重打ち消し）
-  - **修正箇所**: `cmd_vel_bridge_node.py` の逆運動学式（4行）
+  - **なぜ手動モードで気づかなかったか**: `m3508.py` が内部で `vy = -rotated_velocity.y` と反転しているため、手動モードではジョイスティック入力が偶然に正しく動作していた（符号反転の二重打ち消し）
+  - **修正箇所**: `cmd_vel_bridge_node.py` の逆運動学式
     - 修正前: `v_fl = +vx + vy`, `v_fr = -vx + vy`, `v_rl = +vx - vy`, `v_rr = -vx - vy`
     - 修正後: `v_fl = +vx - vy`, `v_fr = -vx - vy`, `v_rl = +vx + vy`, `v_rr = -vx + vy`
   - **検算**: `vy=+1` で `v_fl=-1, v_fr=-1, v_rl=+1, v_rr=+1` → Vy_actual = -(-1-1-1-1)/4 = +1 ✓
@@ -810,78 +479,79 @@ sudo apt install \
   - `waypoints.yaml` を直接編集ファイルに変更（絶対座標で記述）
   - `generate_field_map.py` の docstring・print から `generate_waypoints.py` 参照を削除
 
-- **AMCL デバッグ（`auto_nav_launch.py` 起動時）**
-  - `map_server` の `yaml_filename` パラメータが `.yaml` 拡張子なしで渡される問題を確認
-    → `auto_nav_launch.py` 起動時は `map:=/home/pi/maps/field_synthetic.yaml` を明示すること
+- **AMCL デバッグ**
+  - `map_server` の `yaml_filename` パラメータが `.yaml` 拡張子なしで渡される問題を確認 → `auto_nav_launch.py` 起動時は `map:=/home/pi/maps/field_synthetic.yaml` を明示すること（デフォルト値に拡張子付きで設定済み）
   - AMCL は `set_court` コマンド受信まで `/initialpose` を得られず `map → odom` TF を publish しない（正常動作）
 
-- **センサフュージョン改善メモを `auto_routing_plan.md` に追記**（IMU 加速度有効化・AMCL 更新頻度・z_rand 調整）
+- **センサフュージョン改善メモを auto_routing_plan.md に追記**
 
-### 2026-03-08
+### 2026-03-08（1回目）
 
 - **フェーズ 12**: 事前フィールドマップ + AMCL 自己位置推定への移行
   - slam_toolbox (localization) と scan_relay_node を廃止
   - `generate_field_map.py` でルールブック寸法から合成 PGM/YAML を生成するスクリプトを追加
   - `amcl_params.yaml` を新規作成（OmniMotionModel、scan_topic=scan_filtered）
   - `nav2_params.yaml` に `lifecycle_manager_localization`（map_server + amcl）セクションを追加
-  - `auto_nav_launch.py`: slam_toolbox/scan_relay → map_server + amcl + lifecycle_manager_localization
+  - `auto_nav_launch.py`: slam_toolbox/scan_relay → map_server + amcl + lifecycle_manager_localization（8秒遅延起動）
   - `routing_node.py`: `set_court` 受信時に `field_dimensions.yaml` の `start_positions` から `/initialpose` を publish
   - `colcon build --cmake-force-configure` が必要だった（新スクリプトを file(GLOB) で拾うためキャッシュクリアが必要）
-  - 合成マップ検証: `generate_field_map.py` → 148×80px PGM 生成、`generate_waypoints.py --dry-run` で壁検出座標を確認（north=1.95, south=-2.0, west=-3.7, east=3.65）
-  - **要対応**: `waypoints_relative.yaml` を新座標系（中心=0,0、青コート=+X）向けに更新が必要
+  - 合成マップ検証: `generate_field_map.py` → 148×80px PGM 生成確認
 
 ### 2026-03-07
 
 - **点群回転問題の修正（RViz 上で壁に点群が固定されない問題）**
-  - **LiDAR TF 修正** (`mapping_launch.py`, `auto_nav_launch.py`):
+  - **LiDAR TF 修正** (`auto_nav_launch.py`):
     - 旧: `--yaw 1.5708 --pitch 3.14159 --roll 0.0`
     - 新: `--yaw 1.5708 --pitch 0.0 --roll 0.0`
-    - pitch=π（Y軸180°回転）は X軸を反転させるため、2D スキャン上で左右鏡像を引き起こす。
-      上下反転取付でも 2D スキャンの正しい向きには yaw=-π/2 or π/2 だけで十分。
-      試行錯誤の結果 `yaw=π/2, pitch=0, roll=0` が前後・左右ともに正しいことを実機で確認。
+    - pitch=π（Y軸180°回転）は X軸を反転させるため、2D スキャン上で左右鏡像を引き起こす。試行錯誤の結果 `yaw=π/2, pitch=0, roll=0` が前後・左右ともに正しいことを実機で確認。
   - **odometry_node.py の vy 符号修正**:
     - 旧: `vy = (v_fl + v_fr - v_rl - v_rr) / 4.0`
     - 新: `vy = -(v_fl + v_fr - v_rl - v_rr) / 4.0`
-    - 実機確認: 右移動時に `/odom_raw` の vy が正（左方向）になっていたため符号反転。
-      LiDAR TF が pitch=π で誤っていた間はマップも odom も両方ずれていたため見かけ上動作していた。
+    - 右移動時に /odom_raw の vy が正（左方向）になっていたため符号反転。
   - **確認手順**:
-    1. `ros2 topic echo /imu --field angular_velocity.z` + 左回転 → 正の値（✅ 正常）
-    2. `ros2 topic echo /odom_raw --field twist.twist.angular.z` + 左回転 → 正の値（✅ 正常）
-    3. `ros2 topic echo /odom --field twist.twist.angular.z` + 左回転 → 正の値（✅ 正常）
-    4. RViz (Fixed Frame=odom) でロボット旋回 → 点群が壁に固定される（✅ 修正確認）
+    1. `ros2 topic echo /imu --field angular_velocity.z` + 左回転 → 正の値
+    2. `ros2 topic echo /odom_raw --field twist.twist.angular.z` + 左回転 → 正の値
+    3. `ros2 topic echo /odom --field twist.twist.angular.z` + 左回転 → 正の値
+    4. RViz (Fixed Frame=odom) でロボット旋回 → 点群が壁に固定される
 
 ### 2026-03-05
 
 - **直進蛇行・角度ずれ修正**: HeadingPID の kp が度単位 error に rad/s スケールで掛かる問題を修正
-  - 根本原因: `heading_pid.py` は error を度単位で計算するが、output を rad/s として IK に渡すため
-    kp=1.0 は実効的に 57 倍の大きさで動作し、1° ドリフト → ~1548 RPM の過剰補正
-  - **Fix 1** (`cmd_vel_bridge_node.py` L45): `kp=1.0, kd=0.05` → `kp=0.02, kd=0.001`
-    1° error → 0.02 rad/s → ~31 RPM（全速の 1.5%）と適正化
-  - **Fix 2** (`cmd_vel_bridge_node.py` L140): `OMEGA_THRESHOLD=0.05` → `0.02` rad/s
-    Nav2 のゆっくりしたカーブ中も PID を無効化しやすくする
-  - **Fix 3** (`imu_publisher_node.py`): gz 符号診断ログを追加
-    回転中 (|omega_enc| > 0.05) に `ratio=gz/omega_enc` を DEBUG 出力
-    ratio≈+1.0 → 正常、ratio≈-1.0 → gz 反転が必要
-
-  確認コマンド:
-  ```bash
-  # yaw 安定確認（直進中に値が跳ねないこと）
-  ros2 topic echo /odom --field pose.pose.orientation
-
-  # gz 符号診断（旋回しながら確認）
-  ros2 run auto_nav imu_publisher_node --ros-args --log-level debug
-  ```
+  - 根本原因: `heading_pid.py` は error を度単位で計算するが output を rad/s として IK に渡すため kp=1.0 は実効的に 57 倍の大きさで動作し、1° ドリフト → ~1548 RPM の過剰補正
+  - **Fix 1** (`cmd_vel_bridge_node.py`): `kp=1.0, kd=0.05` → `kp=0.02, kd=0.001`
+  - **Fix 2** (`cmd_vel_bridge_node.py`): `OMEGA_THRESHOLD=0.05` → `0.02` rad/s
+  - **Fix 3** (`imu_publisher_node.py`): gz 符号診断ログを追加（旋回中に `ratio=gz/omega_enc` を DEBUG 出力、ratio≈+1.0 → 正常、ratio≈-1.0 → gz 反転が必要）
 
 ### 2026-03-04
 
 - **フェーズ 11**: エラーアラートとシーケンス途中再開を実装
-  - `routing_node.py`: `start_auto` に `from_index` オプション追加、`_relocate_and_start()` スレッドで initialpose publish + 3 秒カウントダウン後にナビ開始、navigating/arrived/error メッセージに `seq_index`/`seq_total` 追加、auto seq 中の `arrived` メッセージを送信するよう変更
+  - `routing_node.py`: `start_auto` に `from_index` オプション追加、`_relocate_and_start()` スレッドで initialpose publish + map→odom TF 確立まで最大 30 秒待機（1 秒ごとに `nav_status: "relocating"` を送信）後にナビ開始、navigating/arrived/error メッセージに `seq_index`/`seq_total` 追加
   - `useAutoNav.ts`: `isAlertFlashing`/`failedSeqIndex`/`relocatingCountdown` 状態追加、`sendStartAutoFrom(fromIndex)` 追加、`RELOCATING` ステータス追加
   - `AutoNav/index.tsx`: 赤白交互点滅オーバーレイ（error 時）、シーケンスリストに「ここから」ボタン、リローカライズカウントダウン表示、from_index > 0 の確認ダイアログ追加
 
----
+  **競技時のリトライフロー:**
+  ```
+  ① エラー発生 → 画面が赤白点滅（pointer-events-none なのでボタン操作は継続可）
+  ② オペレーター: 「停止」ボタン → 手動でロボットを対象ウェイポイント位置に移動
+  ③ シーケンスリストで失敗行（オレンジ）の「ここから」ボタンを押す
+  ④ 確認ダイアログ → OK
+  ⑤ rspi が /initialpose を publish → TF 確立待ち（最大 30 秒、残秒数を UI に表示）
+  ⑥ ナビゲーション再開（点滅も停止）
+  ```
+
+### 2026-03-03
+
+- **手動制御コート選択機能追加**: `Controller.tsx` にコート選択ボタン（青/赤）を追加
+  - 青コート選択時: l_x・l_y を符号反転（ロボットが南向きのため）
+  - 赤コート選択時: 変換なし（ロボットが北向きのため）
+  - コート選択時に `set_court` コマンドを送信
+
+- **バグ修正**: `routing_node.py` の `_apply_court_transform` の赤コート変換が誤り
+  - 誤: `(x, -y, -θ)` ← 東西線（横線）対称になっていた
+  - 正: `(-x, y, π-θ)` ← 南北線（縦線）対称（フィールドは赤=左・青=右コートが横並び）
 
 ### 2026-03-02
+
 - **フェーズ 9**: routing_node.py に on_arrive シーケンス・start_auto/stop_auto・set_court・コート座標変換を追加
 - ros2_node.py: hand_control は auto/manual 両モードで送信するよう変更（wheel_control のみ auto モード時にスキップ）
 
@@ -890,15 +560,40 @@ sudo apt install \
   - `auto_nav_launch.py` に `web_server_node` を追加（`_WEB_PYTHONPATH` で aiohttp venv を参照）
   - bt_controller: `useWebSocketConnect.tsx`（WS 接続管理フック）
   - bt_controller: `CourtSelector.tsx`（コート選択コンポーネント）
-  - bt_controller: `useAutoNav.ts` をリファクタリング（引数を `sendJson` に抽象化、`court`/`progress`/`sendSetCourt`/`sendStartAuto`/`sendStopAuto` を追加）
+  - bt_controller: `useAutoNav.ts` をリファクタリング（引数を `sendJson` に抽象化）
   - bt_controller: `AutoNav/index.tsx` を更新（BLE/WS タブ切り替え、コート選択、自動シーケンス制御 UI）
 
-  セットアップ（raspi 上で実行）:
-  ```bash
-  cd /home/pi/DRC/khr2026_team1_rspi/src/web_control
-  uv venv --system-site-packages
-  uv add aiohttp
-  cd /home/pi/DRC/khr2026_team1_rspi
-  colcon build --packages-select web_control --symlink-install
-  source install/setup.bash
-  ```
+### 2026-03-01
+
+- **フェーズ 10**: `generate_waypoints.py` + `waypoints_relative.yaml` 実装（PGM 純粋 Python 読み込み、P2/P5 両対応、`--dry-run` オプション付き）→ **2026-03-08 にマップ固定化に伴い削除**
+
+### 2026-02-27
+
+- **EKF センサフュージョン導入**: odometry_node.py から IMU 融合・TF 配信を除去し `/odom_raw` のみに変更。imu_publisher_node.py（新規）+ ekf_params.yaml（新規）を追加
+- SLAM マッピングパラメータ調整（対角壁重複描画・二重壁解消）
+- **routing_node.py 実装**: ActionClient + SingleThreadedExecutor で bluetooth_rx コールバックが無音になる問題 → MultiThreadedExecutor に変更で解決
+- DWB チューニング + MIN_RPM 追加 → **2026-03-09 時点では MPPI に移行済み**
+
+### 2026-02-25
+
+- `nav2_params.yaml` 新規作成（Nav2 組み込み）
+- Nav2 Jazzy 固有のトラブル解決: plugin_lib_names の二重登録、docking_server/collision_monitor のパラメータ追加
+
+### 2026-02-23
+
+- コードレビュー修正（slam params の enable_interactive_mode/do_loop_closing、odometry_node の theta 積分順序修正・共分散行列設定）
+- 実機マッピング成功
+
+### 2026-02-22
+
+- /odom 配信 20Hz、モード切り替え正常確認
+- scripts/*.py に実行権限がなかった → `chmod +x` で修正（スクリプト追加時は必ず実行権限を付与すること）
+- `LaserScanRangeFilter` で /scan_filtered 実装（LaserScanFootprintFilter は TF 変換でサイレント失敗するため不使用）
+- slam_toolbox ライフサイクル問題解決: `ros2 service call /slam_toolbox/change_state` を直接呼び出し（デーモン経由不可）
+
+### 2026-02-21
+
+- `auto_nav` パッケージ新規作成
+- `odometry_node.py`: wheel_feedback → /odom + TF(odom→base_link)
+- `cmd_vel_bridge_node.py`: /cmd_vel → wheel_control、/nav_mode でモード切り替え
+- `mapping_launch.py` 作成 → **2026-03-08 に AMCL 移行に伴い削除**
