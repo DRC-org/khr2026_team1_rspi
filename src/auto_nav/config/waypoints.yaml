@@ -14,6 +14,11 @@ auto_sequence:
 - honmaru
 
 waypoints:
+  home:
+    x: 3.143
+    y: 0.288
+    theta: -1.5707
+    on_arrive: []
   yagura_pickup_1:
     x: 1.404
     y: 0.25
