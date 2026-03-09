@@ -106,20 +106,20 @@ waypoints:
       - action: hand_control
         target: "ring_1"
         control_type: "state"
-        action_value: "close"
+        action_value: "open"
       - action: hand_control
         target: "ring_2"
         control_type: "state"
-        action_value: "close"
+        action_value: "open"
       - action: wait_actuator
         target: "ring_1"
         control_type: "state"
-        value: "close_done"
+        value: "open_done"
         timeout: 10.0
       - action: wait_actuator
         target: "ring_2"
         control_type: "state"
-        value: "close_done"
+        value: "open_done"
         timeout: 10.0
       - action: hand_control
         target: "ring_1"
@@ -175,20 +175,11 @@ waypoints:
       - action: hand_control
         target: "ring_1"
         control_type: "state"
-        action_value: "open"
+        action_value: "close"
       - action: wait_actuator
         target: "ring_1"
         control_type: "state"
-        value: "open_done"
-        timeout: 10.0
-      - action: hand_control
-        target: "yagura_1"
-        control_type: "pos"
-        action_value: "up"
-      - action: wait_actuator
-        target: "yagura_1"
-        control_type: "pos"
-        value: "up_done"
+        value: "close_done"
         timeout: 10.0
 
   yagura_release_2:
@@ -226,20 +217,11 @@ waypoints:
       - action: hand_control
         target: "ring_2"
         control_type: "state"
-        action_value: "open"
+        action_value: "close"
       - action: wait_actuator
         target: "ring_2"
         control_type: "state"
-        value: "open_done"
-        timeout: 10.0
-      - action: hand_control
-        target: "yagura_2"
-        control_type: "pos"
-        action_value: "up"
-      - action: wait_actuator
-        target: "yagura_2"
-        control_type: "pos"
-        value: "up_done"
+        value: "close_done"
         timeout: 10.0
 
   ring_pickup_2:
@@ -265,6 +247,42 @@ waypoints:
         control_type: "pos"
         value: "pickup_done"
         timeout: 10.0
+      - action: hand_control
+        target: "ring_1"
+        control_type: "state"
+        action_value: "open"
+      - action: hand_control
+        target: "ring_2"
+        control_type: "state"
+        action_value: "open"
+      - action: wait_actuator
+        target: "ring_1"
+        control_type: "state"
+        value: "open_done"
+        timeout: 10.0
+      - action: wait_actuator
+        target: "ring_2"
+        control_type: "state"
+        value: "open_done"
+        timeout: 10.0
+      - action: hand_control
+        target: "ring_1"
+        control_type: "pos"
+        action_value: "honmaru"
+      - action: hand_control
+        target: "ring_2"
+        control_type: "pos"
+        action_value: "honmaru"
+      - action: wait_actuator
+        target: "ring_1"
+        control_type: "pos"
+        value: "honmaru_done"
+        timeout: 10.0
+      - action: wait_actuator
+        target: "ring_2"
+        control_type: "pos"
+        value: "honmaru_done"
+        timeout: 10.0
 
   yagura_pickup_2:
     x: 1.404
@@ -275,15 +293,6 @@ waypoints:
         hand_offset_x: 0.35    # 東方向: 櫓がロボット東0.35mに来る
         hand_offset_y: 0.14    # 北方向: 櫓がロボット北0.14mに来る
         timeout: 30.0
-      - action: hand_control
-        target: "yagura_1"
-        control_type: "pos"
-        action_value: "down"
-      - action: wait_actuator
-        target: "yagura_1"
-        control_type: "pos"
-        value: "down_done"
-        timeout: 10.0
       - action: hand_control
         target: "yagura_1"
         control_type: "state"
@@ -338,27 +347,12 @@ waypoints:
       - action: hand_control
         target: "ring_1"
         control_type: "state"
-        action_value: "open"
+        action_value: "close"
       - action: wait_actuator
         target: "ring_1"
         control_type: "state"
-        value: "open_done"
+        value: "close_done"
         timeout: 10.0
-      - action: hand_control
-        target: "yagura_1"
-        control_type: "pos"
-        action_value: "up"
-      - action: wait_actuator
-        target: "yagura_1"
-        control_type: "pos"
-        value: "up_done"
-        timeout: 10.0
-
-  honmaru:
-    x: 0.587
-    y: 1.438
-    theta: -1.5707
-    on_arrive:
       - action: hand_control
         target: "ring_2"
         control_type: "pos"
@@ -368,12 +362,18 @@ waypoints:
         control_type: "pos"
         value: "honmaru_done"
         timeout: 10.0
+
+  honmaru:
+    x: 0.587
+    y: 1.438
+    theta: -1.5707
+    on_arrive:
       - action: hand_control
         target: "ring_2"
         control_type: "state"
-        action_value: "open"
+        action_value: "close"
       - action: wait_actuator
         target: "ring_2"
         control_type: "state"
-        value: "open_done"
+        value: "close_done"
         timeout: 10.0
