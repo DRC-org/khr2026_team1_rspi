@@ -371,9 +371,8 @@ class RoutingNode(Node):
                 px = cos_y * yagura_pos.point.x - sin_y * yagura_pos.point.y + tx
                 py = sin_y * yagura_pos.point.x + cos_y * yagura_pos.point.y + ty
 
-                # 櫓ハンドは東側固定: 常に西から近づき、ロボット中心を櫓の西 approach_dist に置く
-                # ロボットは南向き固定(-π/2)でメカナム横移動(y+)でハンドが櫓に届く
-                goal_x = px - approach_dist
+                # ロボット中心を櫓の東 approach_dist に置く（南向き固定）
+                goal_x = px + approach_dist
                 goal_y = py
                 goal_theta = -math.pi / 2.0
 
