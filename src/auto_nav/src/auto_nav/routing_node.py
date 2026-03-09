@@ -26,7 +26,7 @@ MPPI_TIME_STEPS = 4
 
 # 直接アプローチ用定数
 DIRECT_APPROACH_DIST = 0.3      # Nav2 → 直接アプローチに切り替える距離 [m]
-GOAL_REACHED_DIST = 0.05        # ゴール到達判定距離 [m]
+GOAL_REACHED_DIST = 0.02        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
 
 # 運動学定数（cmd_vel_bridge_node.py と同じ値）
@@ -43,7 +43,7 @@ MIN_RPM_LAT = 800.0
 KP_POS = 2.0          # [RPM / (m/s)] 的な無次元ゲイン（実効速度は MIN_RPM で底上げ）
 KP_YAW = 4.0          # [rad/s / rad]
 MAX_OMEGA = 1.5       # 最大角速度 [rad/s]
-YAW_TOLERANCE = 0.08  # ゴール到達判定の角度許容誤差 [rad] ≈ 4.6°
+YAW_TOLERANCE = 0.04  # ゴール到達判定の角度許容誤差 [rad] ≈ 2.3°
 
 # LiDAR 前方補完停止
 LIDAR_FORWARD_ANGLE = 0.35  # 前方スキャン半角 [rad] ≈ 20°
