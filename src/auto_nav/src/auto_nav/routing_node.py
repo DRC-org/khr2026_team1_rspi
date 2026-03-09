@@ -383,10 +383,11 @@ class RoutingNode(Node):
                     return
 
                 # 櫓に向かうゴール座標を計算
+                # 向きは南固定(-π/2): 横に付いた櫓ハンドをメカナム横移動で合わせる
                 theta = math.atan2(py - ry, px - rx)
                 goal_x = px - approach_dist * math.cos(theta)
                 goal_y = py - approach_dist * math.sin(theta)
-                goal_theta = theta
+                goal_theta = -math.pi / 2.0
 
                 # ネスト航行を開始してシーケンススレッドで完了を待つ
                 done_event = threading.Event()
