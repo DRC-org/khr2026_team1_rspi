@@ -116,11 +116,16 @@ class NavCliNode(Node):
         # robot_pos は高頻度で来るため無視
         if data.get("type") == "robot_pos":
             return
+        # nav_status を持つ routing_node 応答のみ表示・応答イベントをセット
+        if "nav_status" not in data:
+            return
         self._response_event.set()
         _print_status(data)
 
 
 def run_oneshot(node: NavCliNode, args: list[str]) -> int:
+    # シェルのインライン # コメントがそのまま argv に入る場合があるため除去
+    args = args[:next((i for i, a in enumerate(args) if a.startswith("#")), len(args))]
     payload = parse_args_to_payload(args)
     if payload is None:
         print(f"不明なコマンド: {' '.join(args)}", file=sys.stderr)
