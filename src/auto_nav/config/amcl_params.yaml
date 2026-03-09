@@ -16,12 +16,12 @@ amcl:
 
     # --- モーションモデル（全方向移動ロボット用） ---
     robot_model_type: "nav2_amcl::OmniMotionModel"
-    # オドメトリ誤差パラメータ（回転・並進の相互誤差を小さめに設定）
-    alpha1: 0.2
-    alpha2: 0.2
-    alpha3: 0.2
-    alpha4: 0.2
-    alpha5: 0.2
+    # メカナムのスリップを考慮: 回転系誤差を拡大してパーティクルを角度方向に広げる
+    alpha1: 0.8   # 回転運動による回転のズレ
+    alpha2: 0.8   # 並進・横移動による回転のズレ
+    alpha3: 0.2   # 並進のズレ
+    alpha4: 0.2   # 回転による並進のズレ
+    alpha5: 0.2   # 横移動による並進のズレ
 
     # --- レーザーモデル（壁のみの合成マップに適した尤度場モデル） ---
     laser_model_type: "likelihood_field"
@@ -29,11 +29,12 @@ amcl:
     laser_max_range: 100.0
     laser_min_range: -1.0
     max_beams: 60
-    z_hit: 0.5
+    # z_hit + z_short + z_max + z_rand = 0.85+0.05+0.05+0.05 = 1.0
+    z_hit: 0.85
     z_short: 0.05
     z_max: 0.05
-    z_rand: 0.4
-    sigma_hit: 0.2
+    z_rand: 0.05
+    sigma_hit: 0.15
     lambda_short: 0.1
     do_beamskip: false
     beam_skip_distance: 0.5
@@ -48,9 +49,9 @@ amcl:
     tf_broadcast: true
     transform_tolerance: 1.0
 
-    # --- フィルタ更新条件（並進 25cm 以上または回転 20° 以上移動後に更新） ---
-    update_min_d: 0.25
-    update_min_a: 0.349
+    # --- フィルタ更新条件（並進 15cm 以上または回転 5.7° 以上移動後に更新） ---
+    update_min_d: 0.15
+    update_min_a: 0.10
     resample_interval: 1
     pf_err: 0.05
     pf_z: 0.99
@@ -59,8 +60,12 @@ amcl:
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
 
-    # --- 初期位置（routing_node の set_court コマンドで /initialpose を publish するため無効） ---
-    set_initial_pose: false
+    # --- 初期位置（set_court 前でも map→odom TF を即時 publish するためデフォルト原点で有効化） ---
+    # set_court コマンド受信時に routing_node が /initialpose を送信し正確な位置に上書きされる
+    set_initial_pose: true
+    initial_pose_x: 0.0
+    initial_pose_y: 0.0
+    initial_pose_a: 0.0
     save_pose_rate: 0.5
     # map_server が遅延起動しても /map を受け取れるよう TRANSIENT_LOCAL で subscribe
     map_subscribe_transient_local: true

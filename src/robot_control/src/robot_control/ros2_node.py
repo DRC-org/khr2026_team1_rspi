@@ -88,15 +88,23 @@ class RobotController(Node):
         self.hand_fb_buffer: HandMessage | None = None
         self._hand_fb_warned = False  # ハンド未接続の WARN は初回のみ出す
 
+        # 直近の指令 RPM（PID 解析用 target_rpms として送信）
+        self._last_commanded_rpms: list[float] = [0.0, 0.0, 0.0, 0.0]
+        # フィードバック送信サイクル: True=PID解析メッセージ / False=ステータスメッセージ
+        self._fb_cycle: bool = False
+
         self._current_yaw: float | None = None
         self._heading_pid = HeadingPID(kp=0.6, ki=0.0, kd=0.05)
         self._target_yaw: float | None = None
         self._last_cmd_time = time.monotonic()
 
+        self._enable_pid_telemetry = False
+        self._target_motor = "fl"
+
         # ESP32 にコマンドを 50 ms ごとに送信する
         self.create_timer(0.05, self.send_control_command)
-        # コントローラにフィードバックを 100 ms ごとに送信する
-        self.create_timer(0.1, self.send_controller_feedback)
+        # コントローラにフィードバックを 200 ms ごとに送信する (5Hz)
+        self.create_timer(0.2, self.send_controller_feedback)
 
         self.get_logger().info("Robot Controller Node initialized")
 
@@ -173,13 +181,25 @@ class RobotController(Node):
 
                 self.m3508_cntl.set_target_pid_gains(kp, ki, kd)
 
+            elif command["type"] == "set_telemetry":
+                self._enable_pid_telemetry = command.get("enable_pid", False)
+                if "target_motor" in command:
+                    self._target_motor = command.get("target_motor", "fl")
+
+
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse JSON: {e}")
 
     def send_controller_feedback(self) -> None:
         """
         コントローラにフィードバックを送信する。100 ms ごとに呼び出される。
-        ハンド ESP32 が未接続でも、ホイールフィードバックは送信する。
+
+        BLE パケットサイズ制限のため、2 種類のメッセージを交互に送信する：
+        - 偶数サイクル (status): m3508_rpms + pid_gains + yagura + ring  (~260 B)
+        - 奇数サイクル (pid):    m3508_rpms + target_rpms + p/i/d_terms + pid_gains (~300 B)
+          ※ PID terms が未到着の場合は status メッセージで代替
+
+        クライアント側 (usePIDCharts.ts) は p_terms キーの有無でメッセージ種別を判断する。
         """
         if self.wheel_fb_buffer is None:
             self.get_logger().warn("Wheel feedback buffer is None")
@@ -187,6 +207,8 @@ class RobotController(Node):
 
         wheel_fb = self.wheel_fb_buffer
         hand_fb = self.hand_fb_buffer
+        self.wheel_fb_buffer = None
+        self.hand_fb_buffer = None
 
         if hand_fb is None and not self._hand_fb_warned:
             self.get_logger().warn(
@@ -194,52 +216,54 @@ class RobotController(Node):
             )
             self._hand_fb_warned = True
 
+        def r1(v: float) -> float:
+            return round(float(v), 1)
+
+        def r2(v: float) -> float:
+            return round(float(v), 2)
+
+        def r3(v: float) -> float:
+            return round(float(v), 3)
+
         data: dict = {
             "m3508_rpms": {
-                "fl": wheel_fb.m3508_rpms.fl,
-                "fr": wheel_fb.m3508_rpms.fr,
-                "rl": wheel_fb.m3508_rpms.rl,
-                "rr": wheel_fb.m3508_rpms.rr,
+                "fl": r1(wheel_fb.m3508_rpms.fl),
+                "fr": r1(wheel_fb.m3508_rpms.fr),
+                "rl": r1(wheel_fb.m3508_rpms.rl),
+                "rr": r1(wheel_fb.m3508_rpms.rr),
             },
         }
 
-        if wheel_fb.m3508_gains:
-            data["m3508_gains"] = {
-                "kp": wheel_fb.m3508_gains[0].kp,  # type: ignore[index]
-                "ki": wheel_fb.m3508_gains[0].ki,  # type: ignore[index]
-                "kd": wheel_fb.m3508_gains[0].kd,  # type: ignore[index]
-            }
-        else:
-            self.get_logger().debug("m3508_gains is empty in wheel_feedback")
+        if self._enable_pid_telemetry and wheel_fb.m3508_terms:
+            motor = self._target_motor
+            try:
+                term = getattr(wheel_fb.m3508_terms[0], motor)
+                gains = None
+                if wheel_fb.m3508_gains:
+                    g = wheel_fb.m3508_gains[0]
+                    gains = {"kp": r3(g.kp), "ki": r3(g.ki), "kd": r3(g.kd)}
 
-        if wheel_fb.m3508_terms:
-            data["m3508_terms"] = {
-                "fl": {
-                    "p": wheel_fb.m3508_terms[0].fl.p,  # type: ignore[index]
-                    "i": wheel_fb.m3508_terms[0].fl.i,  # type: ignore[index]
-                    "d": wheel_fb.m3508_terms[0].fl.d,  # type: ignore[index]
-                },
-                "fr": {
-                    "p": wheel_fb.m3508_terms[0].fr.p,  # type: ignore[index]
-                    "i": wheel_fb.m3508_terms[0].fr.i,  # type: ignore[index]
-                    "d": wheel_fb.m3508_terms[0].fr.d,  # type: ignore[index]
-                },
-                "rl": {
-                    "p": wheel_fb.m3508_terms[0].rl.p,  # type: ignore[index]
-                    "i": wheel_fb.m3508_terms[0].rl.i,  # type: ignore[index]
-                    "d": wheel_fb.m3508_terms[0].rl.d,  # type: ignore[index]
-                },
-                "rr": {
-                    "p": wheel_fb.m3508_terms[0].rr.p,  # type: ignore[index]
-                    "i": wheel_fb.m3508_terms[0].rr.i,  # type: ignore[index]
-                    "d": wheel_fb.m3508_terms[0].rr.d,  # type: ignore[index]
-                },
-            }
-        else:
-            self.get_logger().debug("m3508_terms is empty in wheel_feedback")
+                motor_idx = {"fl": 0, "fr": 1, "rl": 2, "rr": 3}.get(motor, 0)
+
+                data["pid_data"] = {
+                    "motor": motor,
+                    "target_rpm": r1(self._last_commanded_rpms[motor_idx]),
+                    "output_current": 0,
+                    "p": r2(term.p),
+                    "i": r2(term.i),
+                    "d": r2(term.d),
+                }
+                if gains:
+                    data["pid_data"]["gains"] = gains
+            except AttributeError:
+                self.get_logger().error(f"Invalid motor target: {motor}")
+
+        if not self._enable_pid_telemetry and wheel_fb.m3508_gains:
+            g = wheel_fb.m3508_gains[0]
+            data["pid_gains"] = {"kp": r3(g.kp), "ki": r3(g.ki), "kd": r3(g.kd)}
 
         if hand_fb is not None:
-            self._hand_fb_warned = False  # 再接続時にフラグをリセット
+            self._hand_fb_warned = False
             data["yagura"] = {
                 "1_pos": _YAGURA_POS.get(hand_fb.yagura_1.pos, "stopped"),
                 "1_state": _YAGURA_STATE.get(hand_fb.yagura_1.state, "stopped"),
@@ -254,11 +278,8 @@ class RobotController(Node):
             }
 
         msg = String()
-        msg.data = json.dumps(data)
+        msg.data = json.dumps(data, separators=(',', ':'))
         self.pub_bt_feedback.publish(msg)
-
-        self.wheel_fb_buffer = None
-        self.hand_fb_buffer = None
 
     def send_control_command(self) -> None:
         """
@@ -298,6 +319,12 @@ class RobotController(Node):
                 cmd_omega,
             )
             corrected_rpms = self.m3508_cntl.apply_omega_correction(base_rpms, omega_correction)
+
+            # PID 解析用に指令 RPM を記憶
+            self._last_commanded_rpms = [
+                corrected_rpms[0], corrected_rpms[1],
+                corrected_rpms[2], corrected_rpms[3],
+            ]
 
             wheel_msg = WheelMessage()
             wheel_msg.m3508_rpms.fl = corrected_rpms[0]

@@ -15,11 +15,12 @@ from .constants import RX_CHARACTERISTIC_UUID, SERVICE_UUID, TX_CHARACTERISTIC_U
 
 
 class BluetoothGATTServer:
-    def __init__(self, on_data_received=None):
+    def __init__(self, on_data_received=None, publish_interval: float = 0.2):
         self.device: Optional[Device] = None
         self.tx_char: Optional[Characteristic] = None
         self.send_task: Optional[asyncio.Task] = None
         self.on_data_received = on_data_received
+        self.publish_interval = publish_interval
         self.logger = logging.getLogger("BluetoothGATTServer")
         self.connected_clients = {}  # Connection -> properties dict
         # Buffer for pending TX data (set from ROS thread via call_soon_threadsafe)
@@ -157,13 +158,12 @@ class BluetoothGATTServer:
             await asyncio.get_running_loop().create_future()
 
     async def _send_messages_periodically(self):
-        """Send pending TX data at fixed 100ms intervals.
+        """Send pending TX data at fixed intervals.
 
         Uses wall-clock scheduling so that notify_subscribers() latency
-        does not add to the interval (previous bug: sleep was ADDED to
-        notify time, giving ~200ms cycles instead of 100ms).
+        does not add to the interval.
         """
-        interval = 0.1  # 100ms target
+        interval = self.publish_interval
         loop = asyncio.get_event_loop()
         next_tick = loop.time() + interval
         # === DEBUG ===
@@ -178,22 +178,35 @@ class BluetoothGATTServer:
                 if pending is not None:
                     self._pending_tx_data = None
                     if self.tx_char and self.device:
-                        encoded = pending.encode("utf-8")
-                        self.tx_char.value = encoded
-                        t0 = loop.time()
-                        await self.device.notify_subscribers(self.tx_char)
-                        notify_time = loop.time() - t0
-                        _dbg_count += 1
-                        _dbg_total_notify += notify_time
-                        if notify_time > _dbg_max_notify:
-                            _dbg_max_notify = notify_time
+                        # Fragmentation: split into 240-byte chunks
+                        # (safe margin below 247-byte ATT MTU common on Linux BLE)
+                        # The web controller (receiver) reassembles {} objects via
+                        # brace-depth counting in rxBuffer.
+                        data_bytes = pending.encode("utf-8")
+                        chunk_size = 240
+                        for i in range(0, len(data_bytes), chunk_size):
+                            chunk = data_bytes[i : i + chunk_size]
+                            self.tx_char.value = chunk
+                            t0 = loop.time()
+                            try:
+                                await self.device.notify_subscribers(self.tx_char)
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"notify_subscribers failed (chunk {i//chunk_size}): {e}"
+                                )
+                                break  # 残チャンクを送らずタスクは継続
+                            notify_time = loop.time() - t0
+                            _dbg_count += 1
+                            _dbg_total_notify += notify_time
+                            if notify_time > _dbg_max_notify:
+                                _dbg_max_notify = notify_time
 
                 # === DEBUG: log every 3 seconds ===
                 now = loop.time()
                 if now - _dbg_last_log > 3.0:
                     if _dbg_count > 0:
                         self.logger.debug(
-                            f"[BLE TX DEBUG] {_dbg_count} notifs in 3s "
+                            f"[BLE TX DEBUG] {_dbg_count} chunks in 3s "
                             f"({_dbg_count / 3:.1f}/s) | "
                             f"notify avg={_dbg_total_notify / _dbg_count * 1000:.1f}ms "
                             f"max={_dbg_max_notify * 1000:.1f}ms"
