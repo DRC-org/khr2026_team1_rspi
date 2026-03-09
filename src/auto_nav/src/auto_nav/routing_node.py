@@ -9,7 +9,7 @@ import rclpy.time
 import tf2_ros
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point, PoseWithCovarianceStamped
+from geometry_msgs.msg import Point, PointStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
@@ -86,6 +86,15 @@ class RoutingNode(Node):
             HandMessage, "hand_feedback", self._on_hand_feedback, 10
         )
 
+        self._yagura_pos: PointStamped | None = None
+        self._yagura_pos_lock = threading.Lock()
+        self._sub_yagura = self.create_subscription(
+            PointStamped, "yagura_position_0", self._on_yagura_pos, 10
+        )
+
+        self._approach_done_event: threading.Event | None = None
+        self._approach_success: bool = False
+
         self._sequence_abort = threading.Event()
         self._sequence_thread: threading.Thread | None = None
         self._auto_seq_running: bool = False
@@ -94,6 +103,10 @@ class RoutingNode(Node):
     def _on_hand_feedback(self, msg: HandMessage) -> None:
         with self._hand_fb_lock:
             self._hand_fb = msg
+
+    def _on_yagura_pos(self, msg: PointStamped) -> None:
+        with self._yagura_pos_lock:
+            self._yagura_pos = msg
 
     def _on_odom(self, msg: Odometry) -> None:
         x_mm = msg.pose.pose.position.x * 1000
@@ -245,6 +258,14 @@ class RoutingNode(Node):
 
         result = future.result()
 
+        # yagura_approach のネスト航行完了: シーケンススレッドに通知して即リターン
+        if self._approach_done_event is not None:
+            self._approach_success = (result.status == GoalStatus.STATUS_SUCCEEDED)
+            event = self._approach_done_event
+            self._approach_done_event = None
+            event.set()
+            return
+
         # キャンセル済みの場合は stop_auto/_handle_mode 側で処理済み
         if result.status == GoalStatus.STATUS_CANCELED:
             self._state = "AUTO_IDLE"
@@ -320,6 +341,73 @@ class RoutingNode(Node):
                         return
                     time.sleep(interval)
                     elapsed += interval
+            elif action_type == "yagura_approach":
+                approach_dist = float(act.get("approach_dist", 0.35))
+                timeout = float(act.get("timeout", 30.0))
+
+                # キャッシュされた櫓位置を取得
+                with self._yagura_pos_lock:
+                    yagura_pos = self._yagura_pos
+                if yagura_pos is None:
+                    self._abort_sequence_with_error("yagura_approach: yagura_position_0 未受信")
+                    return
+
+                # 櫓位置を map 座標に変換
+                try:
+                    tf = self._tf_buffer.lookup_transform(
+                        "map", yagura_pos.header.frame_id, rclpy.time.Time()
+                    )
+                except Exception as e:
+                    self._abort_sequence_with_error(f"yagura_approach: TF失敗: {e}")
+                    return
+
+                q = tf.transform.rotation
+                yaw = math.atan2(
+                    2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+                )
+                cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+                tx, ty = tf.transform.translation.x, tf.transform.translation.y
+                px = cos_y * yagura_pos.point.x - sin_y * yagura_pos.point.y + tx
+                py = sin_y * yagura_pos.point.x + cos_y * yagura_pos.point.y + ty
+
+                # ロボット現在位置を map で取得
+                try:
+                    base_tf = self._tf_buffer.lookup_transform(
+                        "map", "base_link", rclpy.time.Time()
+                    )
+                    rx = base_tf.transform.translation.x
+                    ry = base_tf.transform.translation.y
+                except Exception as e:
+                    self._abort_sequence_with_error(f"yagura_approach: base_link TF失敗: {e}")
+                    return
+
+                # 櫓に向かうゴール座標を計算
+                theta = math.atan2(py - ry, px - rx)
+                goal_x = px - approach_dist * math.cos(theta)
+                goal_y = py - approach_dist * math.sin(theta)
+                goal_theta = theta
+
+                # ネスト航行を開始してシーケンススレッドで完了を待つ
+                done_event = threading.Event()
+                self._approach_done_event = done_event
+                self._approach_success = False
+                saved_goal_name = self._current_goal_name
+                self._current_goal_name = "__yagura_approach__"
+                self._state = "NAVIGATING"
+                self._pending_goal_xyz = (goal_x, goal_y, goal_theta)
+                self._goal_retry_count = 0
+                self._nav_failure_retry_count = 0
+                self._send_goal_impl(goal_x, goal_y, goal_theta)
+
+                done_event.wait(timeout=timeout)
+                self._current_goal_name = saved_goal_name
+                self._state = "SEQUENCE"
+
+                if not self._approach_success:
+                    self._abort_sequence_with_error("yagura_approach: ナビゲーション失敗またはタイムアウト")
+                    return
+
             elif action_type == "wait_actuator":
                 target = act.get("target", "")
                 control_type = act.get("control_type", "")
