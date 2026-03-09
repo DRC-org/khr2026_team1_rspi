@@ -94,7 +94,7 @@ class RobotController(Node):
         self._fb_cycle: bool = False
 
         self._current_yaw: float | None = None
-        self._heading_pid = HeadingPID(kp=0.6, ki=0.0, kd=0.05)
+        self._heading_pid = HeadingPID(kp=0.0, ki=0.0, kd=0.0)
         self._target_yaw: float | None = None
         self._last_cmd_time = time.monotonic()
 

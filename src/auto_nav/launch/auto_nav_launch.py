@@ -22,8 +22,7 @@
   - cmd_vel_bridge_node    (/cmd_vel → wheel_control, auto モード時のみ)
   - map_server             (合成 PGM マップ → /map, lifecycle)
   - amcl                   (既知マップでのパーティクルフィルタ自己位置推定, lifecycle)
-  - lifecycle_manager_localization (map_server + amcl のライフサイクル管理)
-  - nav2_bringup           (controller_server / planner_server / behavior_server / bt_navigator)
+  - lifecycle_manager      (map_server + amcl + Nav2 ノードの統合ライフサイクル管理)
   - routing_node           (Bluetooth → NavigateToPose, nav_mode 切り替え)
   - robot_control          (Bluetooth 手動操縦 + ESP32 制御)
   - bt_communication       (Bluetooth GATT サーバー)
@@ -225,11 +224,12 @@ def generate_launch_description():
         parameters=[amcl_params],
     )
 
-    # map_server + amcl のライフサイクル管理
-    lifecycle_manager_localization_node = Node(
+    # localization + navigation 統合ライフサイクル管理
+    # map_server → amcl → Nav2 ノードの順で遷移（nav2_params.yaml の node_names 順）
+    lifecycle_manager_node = Node(
         package="nav2_lifecycle_manager",
         executable="lifecycle_manager",
-        name="lifecycle_manager_localization",
+        name="lifecycle_manager",
         output="screen",
         parameters=[nav2_params],
     )
@@ -271,14 +271,6 @@ def generate_launch_description():
         output="screen",
         parameters=[nav2_params],
         remappings=_nav2_remaps,
-    )
-
-    lifecycle_manager_node = Node(
-        package="nav2_lifecycle_manager",
-        executable="lifecycle_manager",
-        name="lifecycle_manager_navigation",
-        output="screen",
-        parameters=[nav2_params],
     )
 
     routing_node = Node(
@@ -336,14 +328,12 @@ def generate_launch_description():
             ekf_node,
             map_server_node,
             amcl_node,
-            # EKF が odom→base_link TF を発行し始めるまで AMCL 起動を遅延
-            # （TF なしで起動するとスキャンキューが満杯になり AMCL が LiDAR を一切処理できなくなる）
-            TimerAction(period=8.0, actions=[lifecycle_manager_localization_node]),
             controller_server_node,
             planner_server_node,
             behavior_server_node,
             bt_navigator_node,
-            lifecycle_manager_node,
+            # EKF が odom→base_link TF を発行するまで lifecycle 遷移を遅延（IMU キャリブ ~2s + マージン）
+            TimerAction(period=3.0, actions=[lifecycle_manager_node]),
             routing_node,
             robot_control_node,
             bt_communication_node,

@@ -24,7 +24,7 @@ _GZ_COV = 0.05
 _GZ_COV_STATIONARY = 10.0  # 静止中: IMU バイアスを EKF に無視させる
 
 # 起動時バイアスキャリブレーション: 静止状態のサンプルを N 個収集して gz オフセットを推定
-_CALIB_SAMPLES = 100  # ~5 秒分（wheel_feedback は ~20 Hz）
+_CALIB_SAMPLES = 40  # ~2 秒分（wheel_feedback は ~20 Hz）
 
 
 class ImuPublisherNode(Node):
