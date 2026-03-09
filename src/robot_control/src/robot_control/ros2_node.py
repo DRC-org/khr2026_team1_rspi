@@ -219,6 +219,12 @@ class RobotController(Node):
         def r1(v: float) -> float:
             return round(float(v), 1)
 
+        def r2(v: float) -> float:
+            return round(float(v), 2)
+
+        def r3(v: float) -> float:
+            return round(float(v), 3)
+
         data: dict = {
             "m3508_rpms": {
                 "fl": r1(wheel_fb.m3508_rpms.fl),
@@ -235,7 +241,7 @@ class RobotController(Node):
                 gains = None
                 if wheel_fb.m3508_gains:
                     g = wheel_fb.m3508_gains[0]
-                    gains = {"kp": round(g.kp, 3), "ki": round(g.ki, 3), "kd": round(g.kd, 3)}
+                    gains = {"kp": r3(g.kp), "ki": r3(g.ki), "kd": r3(g.kd)}
 
                 motor_idx = {"fl": 0, "fr": 1, "rl": 2, "rr": 3}.get(motor, 0)
 
@@ -243,9 +249,9 @@ class RobotController(Node):
                     "motor": motor,
                     "target_rpm": r1(self._last_commanded_rpms[motor_idx]),
                     "output_current": 0,
-                    "p": round(term.p, 2),
-                    "i": round(term.i, 2),
-                    "d": round(term.d, 2),
+                    "p": r2(term.p),
+                    "i": r2(term.i),
+                    "d": r2(term.d),
                 }
                 if gains:
                     data["pid_data"]["gains"] = gains
@@ -254,7 +260,7 @@ class RobotController(Node):
 
         if not self._enable_pid_telemetry and wheel_fb.m3508_gains:
             g = wheel_fb.m3508_gains[0]
-            data["pid_gains"] = {"kp": round(g.kp, 3), "ki": round(g.ki, 3), "kd": round(g.kd, 3)}
+            data["pid_gains"] = {"kp": r3(g.kp), "ki": r3(g.ki), "kd": r3(g.kd)}
 
         if hand_fb is not None:
             self._hand_fb_warned = False
