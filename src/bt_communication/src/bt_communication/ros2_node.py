@@ -14,12 +14,12 @@ class BluetoothROS2Node(Node):
 
         # Declare parameters
         self.declare_parameter("hci_transport", "usb:0")
-        self.declare_parameter("publish_interval", 0.1)  # seconds
+        self.declare_parameter("publish_interval", 0.2)  # seconds
 
         # Get parameters
         self.hci_transport: str = self.get_parameter("hci_transport").value or "usb:0"
         self.publish_interval: float = (
-            self.get_parameter("publish_interval").value or 0.1
+            self.get_parameter("publish_interval").value or 0.2
         )
 
         # Create publisher for receiving data from Bluetooth
@@ -55,7 +55,8 @@ class BluetoothROS2Node(Node):
 
             try:
                 self.ble_server = BluetoothGATTServer(
-                    on_data_received=self.on_bluetooth_data_received
+                    on_data_received=self.on_bluetooth_data_received,
+                    publish_interval=self.publish_interval,
                 )
                 self.event_loop.run_until_complete(
                     self.ble_server.start(self.hci_transport)

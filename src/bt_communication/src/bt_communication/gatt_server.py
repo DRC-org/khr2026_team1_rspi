@@ -15,11 +15,12 @@ from .constants import RX_CHARACTERISTIC_UUID, SERVICE_UUID, TX_CHARACTERISTIC_U
 
 
 class BluetoothGATTServer:
-    def __init__(self, on_data_received=None):
+    def __init__(self, on_data_received=None, publish_interval: float = 0.2):
         self.device: Optional[Device] = None
         self.tx_char: Optional[Characteristic] = None
         self.send_task: Optional[asyncio.Task] = None
         self.on_data_received = on_data_received
+        self.publish_interval = publish_interval
         self.logger = logging.getLogger("BluetoothGATTServer")
         self.connected_clients = {}  # Connection -> properties dict
         # Buffer for pending TX data (set from ROS thread via call_soon_threadsafe)
@@ -157,13 +158,12 @@ class BluetoothGATTServer:
             await asyncio.get_running_loop().create_future()
 
     async def _send_messages_periodically(self):
-        """Send pending TX data at fixed 100ms intervals.
+        """Send pending TX data at fixed intervals.
 
         Uses wall-clock scheduling so that notify_subscribers() latency
-        does not add to the interval (previous bug: sleep was ADDED to
-        notify time, giving ~200ms cycles instead of 100ms).
+        does not add to the interval.
         """
-        interval = 0.1  # 100ms target
+        interval = self.publish_interval
         loop = asyncio.get_event_loop()
         next_tick = loop.time() + interval
         # === DEBUG ===

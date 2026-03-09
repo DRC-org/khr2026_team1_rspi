@@ -98,10 +98,13 @@ class RobotController(Node):
         self._target_yaw: float | None = None
         self._last_cmd_time = time.monotonic()
 
+        self._enable_pid_telemetry = False
+        self._target_motor = "fl"
+
         # ESP32 にコマンドを 50 ms ごとに送信する
         self.create_timer(0.05, self.send_control_command)
-        # コントローラにフィードバックを 100 ms ごとに送信する
-        self.create_timer(0.1, self.send_controller_feedback)
+        # コントローラにフィードバックを 200 ms ごとに送信する (5Hz)
+        self.create_timer(0.2, self.send_controller_feedback)
 
         self.get_logger().info("Robot Controller Node initialized")
 
@@ -178,6 +181,12 @@ class RobotController(Node):
 
                 self.m3508_cntl.set_target_pid_gains(kp, ki, kd)
 
+            elif command["type"] == "set_telemetry":
+                self._enable_pid_telemetry = command.get("enable_pid", False)
+                if "target_motor" in command:
+                    self._target_motor = command.get("target_motor", "fl")
+
+
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse JSON: {e}")
 
@@ -201,86 +210,66 @@ class RobotController(Node):
         self.wheel_fb_buffer = None
         self.hand_fb_buffer = None
 
-        # サイクルを交互に切り替え
-        self._fb_cycle = not self._fb_cycle
+        if hand_fb is None and not self._hand_fb_warned:
+            self.get_logger().warn(
+                "Hand feedback not available (hand ESP32 not connected?)"
+            )
+            self._hand_fb_warned = True
 
-        # ヘルパー: float を丸めて JSON サイズを削減
         def r1(v: float) -> float:
             return round(float(v), 1)
 
-        def r3(v: float) -> float:
-            return round(float(v), 3)
-
-        rpms = {
-            "fl": r1(wheel_fb.m3508_rpms.fl),
-            "fr": r1(wheel_fb.m3508_rpms.fr),
-            "rl": r1(wheel_fb.m3508_rpms.rl),
-            "rr": r1(wheel_fb.m3508_rpms.rr),
+        data: dict = {
+            "m3508_rpms": {
+                "fl": r1(wheel_fb.m3508_rpms.fl),
+                "fr": r1(wheel_fb.m3508_rpms.fr),
+                "rl": r1(wheel_fb.m3508_rpms.rl),
+                "rr": r1(wheel_fb.m3508_rpms.rr),
+            },
         }
 
-        if self._fb_cycle and wheel_fb.m3508_terms:
-            # --- PID 解析メッセージ（クライアントが p_terms キーで識別）---
-            t = wheel_fb.m3508_terms[0]  # type: ignore[index]
-            data: dict = {
-                "m3508_rpms": rpms,
-                "target_rpms": {
-                    "fl": r1(self._last_commanded_rpms[0]),
-                    "fr": r1(self._last_commanded_rpms[1]),
-                    "rl": r1(self._last_commanded_rpms[2]),
-                    "rr": r1(self._last_commanded_rpms[3]),
-                },
-                "p_terms": {
-                    "fl": r3(t.fl.p),
-                    "fr": r3(t.fr.p),
-                    "rl": r3(t.rl.p),
-                    "rr": r3(t.rr.p),
-                },
-                "i_terms": {
-                    "fl": r3(t.fl.i),
-                    "fr": r3(t.fr.i),
-                    "rl": r3(t.rl.i),
-                    "rr": r3(t.rr.i),
-                },
-                "d_terms": {
-                    "fl": r3(t.fl.d),
-                    "fr": r3(t.fr.d),
-                    "rl": r3(t.rl.d),
-                    "rr": r3(t.rr.d),
-                },
+        if self._enable_pid_telemetry and wheel_fb.m3508_terms:
+            motor = self._target_motor
+            try:
+                term = getattr(wheel_fb.m3508_terms[0], motor)
+                gains = None
+                if wheel_fb.m3508_gains:
+                    g = wheel_fb.m3508_gains[0]
+                    gains = {"kp": round(g.kp, 3), "ki": round(g.ki, 3), "kd": round(g.kd, 3)}
+
+                motor_idx = {"fl": 0, "fr": 1, "rl": 2, "rr": 3}.get(motor, 0)
+
+                data["pid_data"] = {
+                    "motor": motor,
+                    "target_rpm": r1(self._last_commanded_rpms[motor_idx]),
+                    "output_current": 0,
+                    "p": round(term.p, 2),
+                    "i": round(term.i, 2),
+                    "d": round(term.d, 2),
+                }
+                if gains:
+                    data["pid_data"]["gains"] = gains
+            except AttributeError:
+                self.get_logger().error(f"Invalid motor target: {motor}")
+
+        if not self._enable_pid_telemetry and wheel_fb.m3508_gains:
+            g = wheel_fb.m3508_gains[0]
+            data["pid_gains"] = {"kp": round(g.kp, 3), "ki": round(g.ki, 3), "kd": round(g.kd, 3)}
+
+        if hand_fb is not None:
+            self._hand_fb_warned = False
+            data["yagura"] = {
+                "1_pos": _YAGURA_POS.get(hand_fb.yagura_1.pos, "stopped"),
+                "1_state": _YAGURA_STATE.get(hand_fb.yagura_1.state, "stopped"),
+                "2_pos": _YAGURA_POS.get(hand_fb.yagura_2.pos, "stopped"),
+                "2_state": _YAGURA_STATE.get(hand_fb.yagura_2.state, "stopped"),
             }
-            if wheel_fb.m3508_gains:
-                g = wheel_fb.m3508_gains[0]  # type: ignore[index]
-                data["pid_gains"] = {"kp": r3(g.kp), "ki": r3(g.ki), "kd": r3(g.kd)}
-        else:
-            # --- ステータスメッセージ ---
-            if hand_fb is None and not self._hand_fb_warned:
-                self.get_logger().warn(
-                    "Hand feedback not available (hand ESP32 not connected?)"
-                )
-                self._hand_fb_warned = True
-
-            data = {"m3508_rpms": rpms}
-
-            if wheel_fb.m3508_gains:
-                g = wheel_fb.m3508_gains[0]  # type: ignore[index]
-                data["pid_gains"] = {"kp": r3(g.kp), "ki": r3(g.ki), "kd": r3(g.kd)}
-            else:
-                self.get_logger().debug("m3508_gains is empty in wheel_feedback")
-
-            if hand_fb is not None:
-                self._hand_fb_warned = False
-                data["yagura"] = {
-                    "1_pos": _YAGURA_POS.get(hand_fb.yagura_1.pos, "stopped"),
-                    "1_state": _YAGURA_STATE.get(hand_fb.yagura_1.state, "stopped"),
-                    "2_pos": _YAGURA_POS.get(hand_fb.yagura_2.pos, "stopped"),
-                    "2_state": _YAGURA_STATE.get(hand_fb.yagura_2.state, "stopped"),
-                }
-                data["ring"] = {
-                    "1_pos": _RING_POS.get(hand_fb.ring_1.pos, "stopped"),
-                    "1_state": _RING_STATE.get(hand_fb.ring_1.state, "stopped"),
-                    "2_pos": _RING_POS.get(hand_fb.ring_2.pos, "stopped"),
-                    "2_state": _RING_STATE.get(hand_fb.ring_2.state, "stopped"),
-                }
+            data["ring"] = {
+                "1_pos": _RING_POS.get(hand_fb.ring_1.pos, "stopped"),
+                "1_state": _RING_STATE.get(hand_fb.ring_1.state, "stopped"),
+                "2_pos": _RING_POS.get(hand_fb.ring_2.pos, "stopped"),
+                "2_state": _RING_STATE.get(hand_fb.ring_2.state, "stopped"),
+            }
 
         msg = String()
         msg.data = json.dumps(data, separators=(',', ':'))
