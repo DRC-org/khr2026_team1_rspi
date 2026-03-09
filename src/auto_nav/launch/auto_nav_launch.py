@@ -30,14 +30,20 @@
 
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    RegisterEventHandler,
+    TimerAction,
+)
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, TimerAction
 
 _BT_VENV_SITE_PACKAGES = os.path.normpath(
     os.path.join(
@@ -59,6 +65,9 @@ _WEB_PYTHONPATH = _WEB_VENV_SITE_PACKAGES + (":" + _existing if _existing else "
 
 def generate_launch_description():
     auto_nav_share = get_package_share_directory("auto_nav")
+    _reset_script = os.path.join(
+        get_package_prefix("auto_nav"), "lib", "auto_nav", "reset_esp32_serial.py"
+    )
     laser_filters_config = os.path.join(auto_nav_share, "config", "laser_filters.yaml")
     nav2_params = os.path.join(auto_nav_share, "config", "nav2_params.yaml")
     ekf_params = os.path.join(auto_nav_share, "config", "ekf_params.yaml")
@@ -88,7 +97,20 @@ def generate_launch_description():
     _is_serial = IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "serial"']))
     _is_udp = IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "udp4"']))
 
-    # シリアル接続（transport:=serial, デフォルト）
+    # シリアル接続時: micro_ros_agent 起動前に DTR/RTS トグルで ESP32 をリセット
+    reset_esp32_c = ExecuteProcess(
+        cmd=["python3", _reset_script, "/dev/esp32_c"],
+        output="screen",
+        condition=_is_serial,
+    )
+
+    reset_esp32_h = ExecuteProcess(
+        cmd=["python3", _reset_script, "/dev/esp32_h"],
+        output="screen",
+        condition=_is_serial,
+    )
+
+    # シリアル接続（transport:=serial, デフォルト）: リセット完了後に起動
     micro_ros_agent_serial_c = Node(
         package="micro_ros_agent",
         executable="micro_ros_agent",
@@ -96,7 +118,6 @@ def generate_launch_description():
         arguments=["serial", "--dev", "/dev/esp32_c"],
         output="screen",
         emulate_tty=True,
-        condition=_is_serial,
     )
 
     micro_ros_agent_serial_h = Node(
@@ -106,7 +127,6 @@ def generate_launch_description():
         arguments=["serial", "--dev", "/dev/esp32_h"],
         output="screen",
         emulate_tty=True,
-        condition=_is_serial,
     )
 
     # UDP 接続（transport:=udp4, Wi-Fi 経由）
@@ -316,8 +336,14 @@ def generate_launch_description():
             map_arg,
             debug_arg,
             transport_arg,
-            micro_ros_agent_serial_c,
-            micro_ros_agent_serial_h,
+            reset_esp32_c,
+            reset_esp32_h,
+            RegisterEventHandler(
+                OnProcessExit(target_action=reset_esp32_c, on_exit=[micro_ros_agent_serial_c])
+            ),
+            RegisterEventHandler(
+                OnProcessExit(target_action=reset_esp32_h, on_exit=[micro_ros_agent_serial_h])
+            ),
             micro_ros_agent_udp_c,
             micro_ros_agent_udp_h,
             ydlidar_launch,
