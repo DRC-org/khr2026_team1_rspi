@@ -29,14 +29,51 @@ waypoints:
         control_type: "pos"
         action_value: "down"
       - action: hand_control
+        target: "yagura_2"
+        control_type: "pos"
+        action_value: "down"
+      - action: wait_actuator
+        target: "yagura_1"
+        control_type: "pos"
+        value: "down_done"
+        timeout: 10.0
+      - action: wait_actuator
+        target: "yagura_2"
+        control_type: "pos"
+        value: "down_done"
+        timeout: 10.0
+      - action: hand_control
         target: "yagura_1"
         control_type: "state"
         action_value: "close"
+      - action: hand_control
+        target: "yagura_2"
+        control_type: "state"
+        action_value: "close"
+      - action: wait_actuator
+        target: "yagura_1"
+        control_type: "state"
+        value: "close_done"
+        timeout: 10.0
+      - action: wait_actuator
+        target: "yagura_2"
+        control_type: "state"
+        value: "close_done"
+        timeout: 10.0
   ring_pickup_1:
     x: 1.703
     y: 6.712
     theta: -1.5707
-    on_arrive: []
+    on_arrive:
+      - action: hand_control
+        target: "ring_1"
+        control_type: "pos"
+        action_value: "pickup"
+      - action: wait_actuator
+        target: "ring_1"
+        control_type: "pos"
+        value: "pickup_done"
+        timeout: 10.0
   yagura_release_1:
     x: 0.809
     y: 6.462

@@ -62,33 +62,28 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.40
       stateful: True
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      # Raspberry Pi 負荷軽減: バッチ数・ステップ数を最小限に
-      # model_dt >= 1/controller_frequency (0.2s) が必要
-      time_steps: 15
+      # time_steps >= 21 で Savitzky-Golay スムージングフィルタが有効になる
+      time_steps: 24
       model_dt: 0.2
-      # 壁近傍の狭路でより多くの軌跡サンプルを試行するため増加
-      batch_size: 500
-      # 速度ノイズ（軌跡探索の幅）
-      vx_std: 0.4
+      batch_size: 800
+      vx_std: 0.5
       vy_std: 0.25
-      wz_std: 0.35
-      # 速度制限
+      wz_std: 0.2
       vx_max: 2.5
       vx_min: -2.5
       vy_max: 1.5
       vy_min: -1.5
       wz_max: 3.5
-      # 全方向移動モデル（メカナム用）
       motion_model: "Omni"
-      iteration_count: 2
+      iteration_count: 5
       prune_distance: 2.5
       transform_tolerance: 0.2
-      temperature: 0.3
+      temperature: 0.5
       gamma: 0.015
       # /optimal_trajectory (採用経路) と /trajectories (全サンプル) を配信。
       # RViz2 では /trajectories を非表示にして /optimal_trajectory のみ表示する
@@ -120,8 +115,8 @@ controller_server:
       GoalCritic.threshold_to_consider: 1.5
       GoalAngleCritic.enabled: true
       GoalAngleCritic.cost_power: 1
-      GoalAngleCritic.cost_weight: 6.0
-      GoalAngleCritic.threshold_to_consider: 1.0
+      GoalAngleCritic.cost_weight: 2.0
+      GoalAngleCritic.threshold_to_consider: 0.5
       # PathAlignCritic: 横移動でパス上に乗る（use_path_orientations:false で向き強制しない）
       PathAlignCritic.enabled: true
       PathAlignCritic.cost_power: 1

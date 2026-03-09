@@ -14,8 +14,14 @@ from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from robot_msgs.msg import HandMessage
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
+
+_YAGURA_POS_MAP = {"up": 0, "down": 1, "stopped": 2, "up_done": 3, "down_done": 4}
+_YAGURA_STATE_MAP = {"open": 0, "close": 1, "stopped": 2, "open_done": 3, "close_done": 4}
+_RING_POS_MAP = {"pickup": 0, "yagura": 1, "honmaru": 2, "stopped": 3, "pickup_done": 4, "yagura_done": 5, "honmaru_done": 6}
+_RING_STATE_MAP = {"open": 0, "close": 1, "stopped": 2, "open_done": 3, "close_done": 4, "grip_fail": 5}
 
 
 class RoutingNode(Node):
@@ -74,10 +80,20 @@ class RoutingNode(Node):
         self._pub_markers = self.create_publisher(MarkerArray, "/waypoint_markers", 10)
         self.create_timer(1.0, self._publish_waypoint_markers)
 
+        self._hand_fb: HandMessage | None = None
+        self._hand_fb_lock = threading.Lock()
+        self._sub_hand_fb = self.create_subscription(
+            HandMessage, "hand_feedback", self._on_hand_feedback, 10
+        )
+
         self._sequence_abort = threading.Event()
         self._sequence_thread: threading.Thread | None = None
         self._auto_seq_running: bool = False
         self._auto_seq_index: int = 0
+
+    def _on_hand_feedback(self, msg: HandMessage) -> None:
+        with self._hand_fb_lock:
+            self._hand_fb = msg
 
     def _on_odom(self, msg: Odometry) -> None:
         x_mm = msg.pose.pose.position.x * 1000
@@ -293,6 +309,8 @@ class RoutingNode(Node):
                     "action": act.get("action_value", ""),
                 }
                 self._pub_rx.publish(String(data=json.dumps(cmd)))
+                with self._hand_fb_lock:
+                    self._hand_fb = None
             elif action_type == "wait":
                 duration = act.get("duration", 0.0)
                 elapsed = 0.0
@@ -302,7 +320,72 @@ class RoutingNode(Node):
                         return
                     time.sleep(interval)
                     elapsed += interval
+            elif action_type == "wait_actuator":
+                target = act.get("target", "")
+                control_type = act.get("control_type", "")
+                value_str = act.get("value", "")
+                timeout = float(act.get("timeout", 10.0))
+
+                value_map = self._get_value_map(target, control_type)
+                if value_map is None or value_str not in value_map:
+                    self._abort_sequence_with_error(
+                        f"wait_actuator: invalid target/control_type/value: "
+                        f"{target}/{control_type}/{value_str}"
+                    )
+                    return
+                expected = value_map[value_str]
+
+                grip_fail_val = None
+                if target.startswith("ring_") and control_type == "state":
+                    grip_fail_val = _RING_STATE_MAP["grip_fail"]
+
+                deadline = time.monotonic() + timeout
+                interval = 0.05
+                while time.monotonic() < deadline:
+                    if self._sequence_abort.is_set():
+                        return
+                    with self._hand_fb_lock:
+                        fb = self._hand_fb
+                    if fb is not None:
+                        current = self._read_fb_field(fb, target, control_type)
+                        if current == expected:
+                            break
+                        if grip_fail_val is not None and current == grip_fail_val:
+                            self._abort_sequence_with_error(
+                                f"wait_actuator: {target} grip_fail detected"
+                            )
+                            return
+                    time.sleep(interval)
+                else:
+                    self._abort_sequence_with_error(
+                        f"wait_actuator: {target}.{control_type}={value_str} "
+                        f"timeout ({timeout}s)"
+                    )
+                    return
         done_callback()
+
+    def _get_value_map(self, target: str, control_type: str) -> dict | None:
+        if target.startswith("yagura_"):
+            return _YAGURA_POS_MAP if control_type == "pos" else _YAGURA_STATE_MAP if control_type == "state" else None
+        if target.startswith("ring_"):
+            return _RING_POS_MAP if control_type == "pos" else _RING_STATE_MAP if control_type == "state" else None
+        return None
+
+    def _read_fb_field(self, fb: HandMessage, target: str, control_type: str) -> int:
+        mech = getattr(fb, target)
+        return getattr(mech, control_type)
+
+    def _abort_sequence_with_error(self, message: str) -> None:
+        self.get_logger().error(message)
+        self._auto_seq_running = False
+        self._state = "AUTO_IDLE"
+        self._pub_tx.publish(String(data=json.dumps({
+            "nav_status": "error",
+            "waypoint": self._current_goal_name,
+            "message": message,
+            "seq_index": self._auto_seq_index,
+            "seq_total": len(self._auto_seq_names),
+        })))
 
     def _on_sequence_done(self) -> None:
         if self._auto_seq_running:
