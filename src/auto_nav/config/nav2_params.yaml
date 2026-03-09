@@ -79,7 +79,7 @@ controller_server:
       wz_std: 0.35
       # 速度制限
       vx_max: 2.5
-      vx_min: -1.0
+      vx_min: -2.5
       vy_max: 1.5
       vy_min: -1.5
       wz_max: 3.5
@@ -130,7 +130,7 @@ controller_server:
       PathAlignCritic.trajectory_point_step: 3
       PathAlignCritic.threshold_to_consider: 0.5
       PathAlignCritic.offset_from_furthest: 5
-      PathAlignCritic.use_path_orientations: true
+      PathAlignCritic.use_path_orientations: false
       PathFollowCritic.enabled: true
       PathFollowCritic.cost_power: 1
       PathFollowCritic.cost_weight: 8.0
@@ -147,12 +147,14 @@ planner_server:
     expected_planner_frequency: 5.0
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
-      # Dijkstra より高速な A* を使用
-      use_astar: true
-      # 目標地点付近で経路が見つからない場合の許容半径
-      tolerance: 0.5
+      plugin: "nav2_smac_planner::SmacPlanner2D"
+      tolerance: 0.25
       allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      smooth_path: true
+      cost_travel_multiplier: 2.0
 
 # =============================================================================
 # bt_navigator
@@ -218,30 +220,13 @@ global_costmap:
       footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        observation_sources: scan
-        scan:
-          # タイヤ映り込みを除去した /scan_filtered を使用
-          topic: /scan_filtered
-          max_obstacle_height: 2.0
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 3.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # circumscribed_radius=0.397m のため inflation_radius >= 0.397m が必要
-        # 0.40m で MPPI CostCritic の最適化衝突チェックが有効になる
-        cost_scaling_factor: 3.0
+        cost_scaling_factor: 1.5
         inflation_radius: 0.40
       always_send_full_costmap: true
 
@@ -262,7 +247,10 @@ local_costmap:
       resolution: 0.05
       # フットプリント実寸: 中心→前後 0.25m、中心→左右 0.29m
       footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true

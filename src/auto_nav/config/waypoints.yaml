@@ -23,7 +23,15 @@ waypoints:
     x: 1.404
     y: 0.25
     theta: -1.5707
-    on_arrive: []
+    on_arrive:
+      - action: hand_control
+        target: "yagura_1"
+        control_type: "pos"
+        action_value: "down"
+      - action: hand_control
+        target: "yagura_1"
+        control_type: "state"
+        action_value: "close"
   ring_pickup_1:
     x: 1.703
     y: 6.712

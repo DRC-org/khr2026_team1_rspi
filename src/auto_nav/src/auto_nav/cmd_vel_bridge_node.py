@@ -14,6 +14,7 @@ L_X = 0.1725
 L_Y = 0.2425
 G = L_X + L_Y
 MAX_RPM = 12000.0
+MIN_RPM = 400.0
 # cmd_vel がこの秒数来なければゼロ RPM を送って停止（ESP32 watchdog より確実な安全停止）
 CMD_VEL_TIMEOUT = 0.3
 
@@ -99,10 +100,12 @@ class CmdVelBridgeNode(Node):
         # 線速度 → RPM
         rpms = [v * MS_TO_RPM for v in (v_fl, v_fr, v_rl, v_rr)]
 
-        # 最大 RPM を超える場合はスケーリング
         max_abs = max(abs(r) for r in rpms)
         if max_abs > MAX_RPM:
             scale = MAX_RPM / max_abs
+            rpms = [r * scale for r in rpms]
+        elif 0.0 < max_abs < MIN_RPM:
+            scale = MIN_RPM / max_abs
             rpms = [r * scale for r in rpms]
 
         self._publish_rpms(*rpms)

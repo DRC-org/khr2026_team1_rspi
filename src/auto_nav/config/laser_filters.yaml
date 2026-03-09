@@ -3,23 +3,27 @@
 # 目的: ロボット自身のタイヤがスキャン平面に映り込み、
 #       コストマップで自分自身を障害物と認識する問題を防ぐ。
 #
-# 方法: LaserScanRangeFilter で 0.33m 未満の点をすべて除去する。
-#       タイヤ中心までの距離 ≈ 0.30m のため、マージン 0.03m を加えて 0.33m に設定。
+# 方法: StaticLaserScanPolygonFilter で機体形状（矩形）内の点を除去する。
+#       ポリゴンは base_link 座標系で定義し、起動時に laser_frame へ TF 変換してキャッシュ。
+#       Nav2 フットプリント [[0.25, 0.29], ...] + padding 0.03m でタイヤ映り込みをカバー。
 #
-# 注意:
-#   - 0.33m より近い壁も検出できなくなる（Nav2 の最接近距離として留意）
-#   - TF 不要のためシンプルかつ確実に動作する
+# 利点: 距離ベース（旧 LaserScanRangeFilter, 0.33m 未満全除去）と異なり、
+#       機体外の近距離障害物（0.33m 以内の壁等）を検出できる。
 #
-# ※ LaserScanFootprintFilter を試したが TF 変換でサイレントに失敗し
-#    フィルタリングされないことを実機で確認済み（2026-02-22）
+# 前提: base_link → laser_frame の静的 TF が配信されていること（auto_nav_launch.py で設定済み）
+#
+# 経緯:
+#   - LaserScanFootprintFilter は毎スキャン TF 取得のためサイレント失敗を確認（2026-02-22）
+#   - StaticLaserScanPolygonFilter は起動時1回のみ TF 取得のため安定動作する
 
 scan_to_scan_filter_chain:
   ros__parameters:
     filter1:
-      name: range_filter
-      type: laser_filters/LaserScanRangeFilter
+      name: footprint_filter
+      type: laser_filters/StaticLaserScanPolygonFilter
       params:
-        use_message_range_limits: false
-        lower_threshold: 0.33
-        upper_threshold: 12.0
-        lower_replacement_value: 0.0
+        polygon: "[[0.20, 0.24], [-0.20, 0.24], [-0.20, -0.24], [0.20, -0.24]]"
+        polygon_frame: "base_link"
+        invert: false
+        polygon_padding: 0.03
+        transform_timeout: 10.0
