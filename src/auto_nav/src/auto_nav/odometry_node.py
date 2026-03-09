@@ -48,7 +48,17 @@ class OdometryNode(Node):
         self._theta = 0.0
         self._last_time = None
 
+        # wheel_feedback が届くまでゼロ odom を publish して EKF に odom→base_link TF を発行させる
+        # （lifecycle_manager が controller_server を activate する前に TF が必要なため）
+        self._initial_pub_timer = self.create_timer(0.05, self._publish_initial_odom)
+
         self.get_logger().info("Odometry Node initialized")
+
+    def _publish_initial_odom(self) -> None:
+        if self._last_time is not None:
+            self._initial_pub_timer.cancel()
+            return
+        self._publish_odom(self.get_clock().now().to_msg(), 0.0, 0.0, 0.0, 0.0, 1.0)
 
     def _on_feedback(self, msg: WheelMessage) -> None:
         now = self.get_clock().now()
