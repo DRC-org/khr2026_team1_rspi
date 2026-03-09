@@ -26,7 +26,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 MPPI_TIME_STEPS = 8
 
 # 直接アプローチ用定数
-DIRECT_APPROACH_DIST = 0.0      # 0.0 = 無効（MPPI が最後まで制御）
+DIRECT_APPROACH_DIST = 0.3      # 0.3m 以内で直接アプローチに切り替え
 GOAL_REACHED_DIST = 0.02        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
 
@@ -143,6 +143,8 @@ class RoutingNode(Node):
         self._sub_yagura = self.create_subscription(
             PointStamped, "yagura_position_0", self._on_yagura_pos, 10
         )
+
+        self._last_initialpose_pub: float = 0.0
 
         self._approach_done_event: threading.Event | None = None
         self._approach_success: bool = False
@@ -859,7 +861,28 @@ class RoutingNode(Node):
 
             return
 
-        # DIRECT_APPROACH 状態
+        # DIRECT_APPROACH 状態: 0.5 秒ごとに現在 TF 位置を /initialpose に publish して AMCL を収束させる
+        now_mono = time.monotonic()
+        if now_mono - self._last_initialpose_pub >= 0.5:
+            self._last_initialpose_pub = now_mono
+            msg = PoseWithCovarianceStamped()
+            msg.header.frame_id = "map"
+            msg.header.stamp = (
+                self.get_clock().now() - rclpy.duration.Duration(seconds=0.5)
+            ).to_msg()
+            try:
+                map_tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+                msg.pose.pose.position.x = map_tf.transform.translation.x
+                msg.pose.pose.position.y = map_tf.transform.translation.y
+                msg.pose.pose.orientation.z = map_tf.transform.rotation.z
+                msg.pose.pose.orientation.w = map_tf.transform.rotation.w
+                msg.pose.covariance[0] = 0.05
+                msg.pose.covariance[7] = 0.05
+                msg.pose.covariance[35] = 0.02
+                self._pub_initial_pose.publish(msg)
+            except Exception:
+                pass
+
         qz = tf.transform.rotation.z
         qw = tf.transform.rotation.w
         yaw = 2.0 * math.atan2(qz, qw)

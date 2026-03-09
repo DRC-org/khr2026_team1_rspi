@@ -14,8 +14,8 @@ L_X = 0.1725
 L_Y = 0.2425
 G = L_X + L_Y
 MAX_RPM = 12000.0
-MIN_RPM_FWD = 100.0
-MIN_RPM_LAT = 100.0
+MIN_RPM_FWD = 1000.0
+MIN_RPM_LAT = 1000.0
 # cmd_vel がこの秒数来なければゼロ RPM を送って停止（ESP32 watchdog より確実な安全停止）
 CMD_VEL_TIMEOUT = 0.3
 

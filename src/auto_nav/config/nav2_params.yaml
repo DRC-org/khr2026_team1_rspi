@@ -59,7 +59,7 @@ controller_server:
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 5
-      model_dt: 0.1
+      model_dt: 0.2
       batch_size: 800
       vx_std: 0.3
       vy_std: 0.15
@@ -70,7 +70,7 @@ controller_server:
       vy_min: -1.5
       wz_max: 3.5
       motion_model: "Omni"
-      iteration_count: 1
+      iteration_count: 2
       prune_distance: 2.5
       transform_tolerance: 0.2
       temperature: 0.3
