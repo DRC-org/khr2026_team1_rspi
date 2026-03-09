@@ -25,7 +25,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 MPPI_TIME_STEPS = 4
 
 # 直接アプローチ用定数
-DIRECT_APPROACH_DIST = 0.5      # Nav2 → 直接アプローチに切り替える距離 [m]
+DIRECT_APPROACH_DIST = 0.3      # Nav2 → 直接アプローチに切り替える距離 [m]
 GOAL_REACHED_DIST = 0.05        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
 
@@ -40,8 +40,8 @@ MIN_RPM_FWD = 600.0
 MIN_RPM_LAT = 800.0
 
 # 並進 + 回転 P 制御
-KP_POS = 1.0          # [RPM / (m/s)] 的な無次元ゲイン（実効速度は MIN_RPM で底上げ）
-KP_YAW = 2.0          # [rad/s / rad]
+KP_POS = 2.0          # [RPM / (m/s)] 的な無次元ゲイン（実効速度は MIN_RPM で底上げ）
+KP_YAW = 4.0          # [rad/s / rad]
 MAX_OMEGA = 1.5       # 最大角速度 [rad/s]
 YAW_TOLERANCE = 0.08  # ゴール到達判定の角度許容誤差 [rad] ≈ 4.6°
 
