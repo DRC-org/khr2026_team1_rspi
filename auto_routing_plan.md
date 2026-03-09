@@ -95,7 +95,7 @@ set_court コマンドを受信するまで AMCL は `/initialpose` を受け取
 | `src/auto_nav/src/auto_nav/imu_publisher_node.py` | wheel_feedback → /imu（起動時バイアスキャリブ） |
 | `src/auto_nav/src/auto_nav/cmd_vel_bridge_node.py` | /cmd_vel → wheel_control（ヨー PID 付き） |
 | `src/auto_nav/src/auto_nav/routing_node.py` | Bluetooth/WS → NavigateToPose、on_arrive、set_court |
-| `src/auto_nav/src/auto_nav/yagura_position_node.py` | /scan から矢倉位置検出 |
+| `src/auto_nav/src/auto_nav/yagura_position_node.py` | /scan から前方±60°のΦ114mm円柱を最大3本検出、距離近い順に yagura_position_0/1/2 で配信 |
 | `src/auto_nav/scripts/generate_field_map.py` | field_dimensions.yaml → 合成 PGM/YAML 生成 |
 | `src/auto_nav/config/field_dimensions.yaml` | フィールド寸法・コート別初期位置 |
 | `src/auto_nav/config/waypoints.yaml` | ウェイポイント絶対座標（直接編集） |
@@ -425,8 +425,10 @@ ros2 topic pub /cmd_vel geometry_msgs/Twist \
 # MPPI 動作確認（5Hz 付近で安定出力されていれば OK）
 ros2 topic hz /cmd_vel
 
-# yagura_position_node 確認
-ros2 topic echo /yagura_position
+# yagura_position_node 確認（距離近い順に _0/_1/_2）
+ros2 topic echo /yagura_position_0
+ros2 topic echo /yagura_position_1
+ros2 topic echo /yagura_position_2
 ```
 
 ---

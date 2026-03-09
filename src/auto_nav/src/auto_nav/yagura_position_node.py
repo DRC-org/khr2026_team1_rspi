@@ -1,14 +1,21 @@
 """
-yagura_position_node — 右側の櫓（Phi114mm）2D座標検出
+yagura_position_node — 櫓（Phi114mm）2D座標検出（最大3本）
 
-/scan を購読し、ロボット右側（base_link y-）に存在する
-Phi114mm 円柱の中心位置を base_link 座標系の PointStamped で配信する。
+/scan を購読し、全周から Phi114mm 円柱を最大 3 本検出し、
+距離が近い順に base_link 座標系の PointStamped で配信する。
+
+トピック:
+  yagura_position_0  最も近い櫓
+  yagura_position_1  2番目に近い櫓
+  yagura_position_2  3番目に近い櫓
+  yagura_markers     RViz 可視化
 
 パラメータ:
   cylinder_radius   期待半径 [m] (デフォルト 0.057 = Phi114mm/2)
   radius_tolerance  半径の許容誤差 [m] (デフォルト 0.015 = ±15mm)
   min_range         最小検出距離 [m] (デフォルト 0.05)
   max_range         最大検出距離 [m] (デフォルト 2.5)
+  max_yagura        最大検出数 (デフォルト 3)
 """
 
 import math
@@ -25,9 +32,11 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 import tf2_ros
 
-# 右側検出範囲: base_link y- 方向を中心に ±60 度
-_RIGHT_CENTER_RAD = math.radians(-90.0)
-_RIGHT_HALF_RAD = math.radians(60.0)
+_MAX_YAGURA = 3
+
+# 前方検出範囲: base_link x+ 方向を中心に ±60 度
+_FRONT_CENTER_RAD = 0.0
+_FRONT_HALF_RAD = math.radians(60.0)
 
 
 class YaguraPositionNode(Node):
@@ -41,6 +50,7 @@ class YaguraPositionNode(Node):
         self.declare_parameter("cluster_gap", 0.10)        # m
         self.declare_parameter("min_cluster_points", 3)
         self.declare_parameter("target_frame", "base_link")
+        self.declare_parameter("max_yagura", _MAX_YAGURA)
 
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
@@ -48,10 +58,13 @@ class YaguraPositionNode(Node):
         self._sub = self.create_subscription(
             LaserScan, "/scan", self._on_scan, QoSPresetProfiles.SENSOR_DATA.value
         )
-        self._pub_pos = self.create_publisher(PointStamped, "yagura_position", 10)
+        self._pub_pos = [
+            self.create_publisher(PointStamped, f"yagura_position_{i}", 10)
+            for i in range(_MAX_YAGURA)
+        ]
         self._pub_marker = self.create_publisher(MarkerArray, "yagura_markers", 10)
 
-        self.get_logger().info("YaguraPosition initialized (Phi114mm, right side)")
+        self.get_logger().info("YaguraPosition initialized (Phi114mm, all directions, max 3)")
 
     def _on_scan(self, msg: LaserScan) -> None:
         r_target = self.get_parameter("cylinder_radius").value
@@ -84,7 +97,9 @@ class YaguraPositionNode(Node):
         tx = tf.transform.translation.x
         ty = tf.transform.translation.y
 
-        # 右側（base_link y-）±60 度の範囲のみ残す
+        max_yagura = int(self.get_parameter("max_yagura").value)
+
+        # 前方 ±60° の点を base_link 座標に変換
         points_base = []
         for i, r in enumerate(msg.ranges):
             if not (min_r <= r <= max_r) or not math.isfinite(r):
@@ -96,10 +111,10 @@ class YaguraPositionNode(Node):
             yb = sin_y * xl + cos_y * yl + ty
             heading = math.atan2(yb, xb)
             diff = abs(math.atan2(
-                math.sin(heading - _RIGHT_CENTER_RAD),
-                math.cos(heading - _RIGHT_CENTER_RAD),
+                math.sin(heading - _FRONT_CENTER_RAD),
+                math.cos(heading - _FRONT_CENTER_RAD),
             ))
-            if diff <= _RIGHT_HALF_RAD:
+            if diff <= _FRONT_HALF_RAD:
                 points_base.append((xb, yb))
 
         if len(points_base) < min_pts:
@@ -107,7 +122,7 @@ class YaguraPositionNode(Node):
 
         clusters = _cluster_scan_points(points_base, gap)
 
-        # 各クラスタで円フィッティング、半径が Phi114mm に最も近い候補を採用
+        # 各クラスタで円フィッティング → 距離順にソート
         candidates = []
         for cl in clusters:
             if len(cl) < min_pts:
@@ -116,34 +131,36 @@ class YaguraPositionNode(Node):
             if cx is None:
                 continue
             if abs(radius - r_target) <= r_tol:
-                r_err = abs(radius - r_target)
                 dist = math.hypot(cx, cy)
-                candidates.append((r_err, dist, cx, cy, radius))
+                candidates.append((dist, cx, cy, radius))
 
         if not candidates:
             return
 
-        candidates.sort()
-        _, _, cx, cy, _ = candidates[0]
+        candidates.sort()  # 距離近い順
 
-        pt = PointStamped()
-        pt.header.stamp = msg.header.stamp
-        pt.header.frame_id = target_frame
-        pt.point.x = cx
-        pt.point.y = cy
-        pt.point.z = 0.0
-        self._pub_pos.publish(pt)
+        # 最大 max_yagura 本を publish
+        for idx, (dist, cx, cy, radius) in enumerate(candidates[:max_yagura]):
+            pt = PointStamped()
+            pt.header.stamp = msg.header.stamp
+            pt.header.frame_id = target_frame
+            pt.point.x = cx
+            pt.point.y = cy
+            pt.point.z = 0.0
+            self._pub_pos[idx].publish(pt)
 
         self.get_logger().debug(
-            "Yagura: x=%.3f y=%.3f dist=%.3fm r_fit=%dmm (%d candidates)"
-            % (cx, cy, candidates[0][1], int(candidates[0][4] * 1000), len(candidates))
+            "Yagura: %d detected (of %d candidates)"
+            % (min(len(candidates), max_yagura), len(candidates))
         )
 
-        self._publish_markers(msg.header.stamp, target_frame, candidates)
+        self._publish_markers(msg.header.stamp, target_frame, candidates[:max_yagura])
 
     def _publish_markers(self, stamp, frame_id, candidates) -> None:
+        colors = [(1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 0.0)]
         arr = MarkerArray()
-        for i, (_, _, cx, cy, radius) in enumerate(candidates):
+        for i, (_, cx, cy, radius) in enumerate(candidates):
+            r, g, b = colors[i] if i < len(colors) else (0.5, 0.5, 0.5)
             m = Marker()
             m.header.stamp = stamp
             m.header.frame_id = frame_id
@@ -159,9 +176,9 @@ class YaguraPositionNode(Node):
             m.scale.y = radius * 2.0
             m.scale.z = 0.4
             m.color.a = 0.7
-            m.color.r = 1.0 if i == 0 else 0.5
-            m.color.g = 0.5 if i == 0 else 0.5
-            m.color.b = 0.0
+            m.color.r = r
+            m.color.g = g
+            m.color.b = b
             m.lifetime.sec = 1
             arr.markers.append(m)
         self._pub_marker.publish(arr)

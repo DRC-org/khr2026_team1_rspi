@@ -261,7 +261,8 @@ sudo apt install \
 
 ## yagura_position_node（櫓座標検出）
 
-`/scan` から Φ114mm 円柱の base_link 2D座標を検出して配信するノード。
+`/scan` から Φ114mm 円柱を前方 ±60° の範囲で最大 3 本検出し、
+距離が近い順に base_link 座標系の PointStamped で配信するノード。
 `auto_nav` パッケージに含まれる。
 
 ### 起動
@@ -270,22 +271,36 @@ sudo apt install \
 ros2 run auto_nav launch_yagura_position.py
 
 # 結果確認
-ros2 topic echo /yagura_position
+ros2 topic echo /yagura_position_0  # 最近傍
+ros2 topic echo /yagura_position_1  # 2番目
+ros2 topic echo /yagura_position_2  # 3番目
 ```
 
 ### トピック
 
 | トピック | 型 | 内容 |
 |---|---|---|
-| `yagura_position` | `geometry_msgs/PointStamped` | 櫓中心の base_link 2D座標 |
-| `yagura_markers` | `visualization_msgs/MarkerArray` | RViz 可視化 |
+| `yagura_position_0` | `geometry_msgs/PointStamped` | 最も近い櫓の base_link 2D座標 |
+| `yagura_position_1` | `geometry_msgs/PointStamped` | 2番目に近い櫓の base_link 2D座標 |
+| `yagura_position_2` | `geometry_msgs/PointStamped` | 3番目に近い櫓の base_link 2D座標 |
+| `yagura_markers` | `visualization_msgs/MarkerArray` | RViz 可視化（全て赤） |
 
 ### 主要パラメータ
 
 | パラメータ | デフォルト | 説明 |
 |---|---|---|
 | `max_range` | 2.5 m | 最大検出距離 |
-| `radius_tolerance` | 0.015 m | 半径の許容誤差（±15mm） |
+| `radius_tolerance` | 0.015 m | 半径の許容誤差（±15mm、Φ114mm基準） |
+| `cluster_gap` | 0.10 m | クラスタ分割距離閾値 |
+| `min_cluster_points` | 3 | クラスタ最小点数 |
+| `max_yagura` | 3 | 最大検出本数 |
+
+### 検出仕様
+
+- 検出範囲: 前方 ±60°（base_link x+ 方向を中心）
+- 出力座標: base_link 座標系での円中心 (x, y)、z=0
+- ソート: 距離が近い順に `_0`, `_1`, `_2` へ割り当て
+- 検出できなかったトピックは publish されない
 
 ### 前提
 
