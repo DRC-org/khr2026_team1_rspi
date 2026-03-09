@@ -371,22 +371,10 @@ class RoutingNode(Node):
                 px = cos_y * yagura_pos.point.x - sin_y * yagura_pos.point.y + tx
                 py = sin_y * yagura_pos.point.x + cos_y * yagura_pos.point.y + ty
 
-                # ロボット現在位置を map で取得
-                try:
-                    base_tf = self._tf_buffer.lookup_transform(
-                        "map", "base_link", rclpy.time.Time()
-                    )
-                    rx = base_tf.transform.translation.x
-                    ry = base_tf.transform.translation.y
-                except Exception as e:
-                    self._abort_sequence_with_error(f"yagura_approach: base_link TF失敗: {e}")
-                    return
-
-                # 櫓に向かうゴール座標を計算
-                # 向きは南固定(-π/2): 横に付いた櫓ハンドをメカナム横移動で合わせる
-                theta = math.atan2(py - ry, px - rx)
-                goal_x = px - approach_dist * math.cos(theta)
-                goal_y = py - approach_dist * math.sin(theta)
+                # 櫓ハンドは西側固定: 常に東から近づき、ロボット中心を櫓の東 approach_dist に置く
+                # ロボットは南向き固定(-π/2)でメカナム横移動(y-)でハンドが櫓に届く
+                goal_x = px + approach_dist
+                goal_y = py
                 goal_theta = -math.pi / 2.0
 
                 # ネスト航行を開始してシーケンススレッドで完了を待つ
