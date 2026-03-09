@@ -21,14 +21,12 @@ from robot_msgs.msg import HandMessage, WheelMessage
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
-# 距離に応じた MPPI time_steps 動的変更
-NEAR_GOAL_DIST = 1.5            # time_steps を短縮する距離 [m]
-NEAR_GOAL_TIME_STEPS = 3        # ゴール近傍の time_steps
-FAR_GOAL_TIME_STEPS = 8         # ゴール遠方の time_steps
+# MPPI time_steps（固定）
+MPPI_TIME_STEPS = 4
 
 # 直接アプローチ用定数
-DIRECT_APPROACH_DIST = 0.5      # Nav2 → 直接アプローチに切り替える距離 [m]
-GOAL_REACHED_DIST = 0.05        # ゴール到達判定距離 [m]
+DIRECT_APPROACH_DIST = 0.3      # Nav2 → 直接アプローチに切り替える距離 [m]
+GOAL_REACHED_DIST = 0.02        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
 
 # 運動学定数（cmd_vel_bridge_node.py と同じ値）
@@ -42,10 +40,10 @@ MIN_RPM_FWD = 600.0
 MIN_RPM_LAT = 800.0
 
 # 並進 + 回転 P 制御
-KP_POS = 1.0          # [RPM / (m/s)] 的な無次元ゲイン（実効速度は MIN_RPM で底上げ）
-KP_YAW = 2.0          # [rad/s / rad]
+KP_POS = 2.0          # [RPM / (m/s)] 的な無次元ゲイン（実効速度は MIN_RPM で底上げ）
+KP_YAW = 4.0          # [rad/s / rad]
 MAX_OMEGA = 1.5       # 最大角速度 [rad/s]
-YAW_TOLERANCE = 0.08  # ゴール到達判定の角度許容誤差 [rad] ≈ 4.6°
+YAW_TOLERANCE = 0.04  # ゴール到達判定の角度許容誤差 [rad] ≈ 2.3°
 
 # LiDAR 前方補完停止
 LIDAR_FORWARD_ANGLE = 0.35  # 前方スキャン半角 [rad] ≈ 20°
@@ -124,8 +122,7 @@ class RoutingNode(Node):
         self._sub_scan = self.create_subscription(
             LaserScan, "/scan_filtered", self._on_scan, 10
         )
-        # nav2_params.yaml の初期値（5）と合わせる
-        self._current_time_steps: int = 5
+        self._current_time_steps: int = MPPI_TIME_STEPS
         self._set_params_client = self.create_client(
             SetParameters, "/controller_server/set_parameters"
         )
@@ -841,13 +838,8 @@ class RoutingNode(Node):
                 if self._goal_handle:
                     self._goal_handle.cancel_goal_async()
                     self._goal_handle = None
-                self._set_mppi_time_steps(FAR_GOAL_TIME_STEPS)
                 return
 
-            # MPPI time_steps を距離に応じて動的変更
-            desired = NEAR_GOAL_TIME_STEPS if dist <= NEAR_GOAL_DIST else FAR_GOAL_TIME_STEPS
-            if desired != self._current_time_steps:
-                self._set_mppi_time_steps(desired)
             return
 
         # DIRECT_APPROACH 状態
