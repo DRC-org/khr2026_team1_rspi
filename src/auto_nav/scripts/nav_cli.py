@@ -19,6 +19,7 @@ nav_cli.py — routing_node を bluetooth_rx 経由でコマンド操作する C
 import json
 import sys
 import threading
+import time
 
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -173,6 +174,9 @@ def main():
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
+    # DDS サブスクライバ登録が routing_node に伝わるまで待機（応答取りこぼし防止）
+    time.sleep(0.3)
+
     cli_args = sys.argv[1:]
     exit_code = 0
     try:
@@ -180,8 +184,11 @@ def main():
             exit_code = run_oneshot(node, cli_args)
         else:
             run_interactive(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         executor.shutdown(timeout_sec=1.0)
+        spin_thread.join(timeout=1.0)
         node.destroy_node()
         rclpy.shutdown()
 
