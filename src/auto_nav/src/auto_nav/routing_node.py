@@ -22,7 +22,7 @@ from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
 # MPPI time_steps（固定）
-MPPI_TIME_STEPS = 4
+MPPI_TIME_STEPS = 8
 
 # 直接アプローチ用定数
 DIRECT_APPROACH_DIST = 0.3      # Nav2 → 直接アプローチに切り替える距離 [m]
