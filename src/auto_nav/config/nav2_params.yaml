@@ -94,8 +94,8 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 8
-      model_dt: 0.2
+      time_steps: 5
+      model_dt: 0.1
       batch_size: 800
       vx_std: 0.3
       vy_std: 0.15
@@ -106,11 +106,11 @@ controller_server:
       vy_min: -1.5
       wz_max: 3.5
       motion_model: "Omni"
-      iteration_count: 5
+      iteration_count: 1
       prune_distance: 2.5
       transform_tolerance: 0.2
-      temperature: 0.15
-      gamma: 0.05
+      temperature: 0.3
+      gamma: 0.015
       # /optimal_trajectory (採用経路) と /trajectories (全サンプル) を配信。
       # RViz2 では /trajectories を非表示にして /optimal_trajectory のみ表示する
       visualize: true
