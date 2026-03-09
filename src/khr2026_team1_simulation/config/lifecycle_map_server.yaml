@@ -1,0 +1,6 @@
+# map_server のみを管理する lifecycle manager（シミュ用）
+lifecycle_manager_map:
+  ros__parameters:
+    autostart: true
+    node_names:
+      - map_server

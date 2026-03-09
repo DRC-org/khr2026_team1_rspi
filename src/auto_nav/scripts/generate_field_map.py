@@ -3,10 +3,11 @@
 
 使い方:
     ros2 run auto_nav generate_field_map.py
-    # または
+    ros2 run auto_nav generate_field_map.py -- --output-dir /path/to/maps
     python3 generate_field_map.py
+    python3 generate_field_map.py --output-dir /path/to/maps
 
-出力:
+出力（デフォルト）:
     /home/pi/maps/field_synthetic.pgm
     /home/pi/maps/field_synthetic.yaml
 
@@ -14,6 +15,7 @@
     config/field_dimensions.yaml（本パッケージ内）
 """
 
+import argparse
 import os
 import struct
 import sys
@@ -109,6 +111,15 @@ def _generate_yaml(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="合成フィールドマップ（PGM+YAML）を生成")
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="/home/pi/maps",
+        help="出力ディレクトリ（デフォルト: /home/pi/maps）",
+    )
+    args = parser.parse_args()
+
     config = _load_field_dimensions()
 
     field = config["field"]
@@ -126,7 +137,7 @@ def main() -> None:
     print(f"  壁厚: {wall_thickness_m} m, 解像度: {resolution} m/cell")
     print(f"  マップ原点: ({origin_x}, {origin_y})")
 
-    output_dir = Path("/home/pi/maps")
+    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     pgm_path = output_dir / "field_synthetic.pgm"
