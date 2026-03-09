@@ -35,7 +35,7 @@ lifecycle_manager:
 # =============================================================================
 controller_server:
   ros__parameters:
-    controller_frequency: 5.0
+    controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
@@ -253,7 +253,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.5
-        # フットプリント対角半径 0.38m に対し、レーザーフィルタの実効除去範囲
-        # (±0.23m×±0.27m) を考慮して 0.30m に縮小。壁際ゴールへの到達性を確保。
-        inflation_radius: 0.30
+        # ロボット外接円 0.397m より大きくする必要がある（Nav2 警告対応）
+        # 壁際ゴールへの到達性は xy_goal_tolerance と GoalCritic で確保
+        inflation_radius: 0.42
       always_send_full_costmap: true
