@@ -178,22 +178,35 @@ class BluetoothGATTServer:
                 if pending is not None:
                     self._pending_tx_data = None
                     if self.tx_char and self.device:
-                        encoded = pending.encode("utf-8")
-                        self.tx_char.value = encoded
-                        t0 = loop.time()
-                        await self.device.notify_subscribers(self.tx_char)
-                        notify_time = loop.time() - t0
-                        _dbg_count += 1
-                        _dbg_total_notify += notify_time
-                        if notify_time > _dbg_max_notify:
-                            _dbg_max_notify = notify_time
+                        # Fragmentation: split into 240-byte chunks
+                        # (safe margin below 247-byte ATT MTU common on Linux BLE)
+                        # The web controller (receiver) reassembles {} objects via
+                        # brace-depth counting in rxBuffer.
+                        data_bytes = pending.encode("utf-8")
+                        chunk_size = 240
+                        for i in range(0, len(data_bytes), chunk_size):
+                            chunk = data_bytes[i : i + chunk_size]
+                            self.tx_char.value = chunk
+                            t0 = loop.time()
+                            try:
+                                await self.device.notify_subscribers(self.tx_char)
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"notify_subscribers failed (chunk {i//chunk_size}): {e}"
+                                )
+                                break  # 残チャンクを送らずタスクは継続
+                            notify_time = loop.time() - t0
+                            _dbg_count += 1
+                            _dbg_total_notify += notify_time
+                            if notify_time > _dbg_max_notify:
+                                _dbg_max_notify = notify_time
 
                 # === DEBUG: log every 3 seconds ===
                 now = loop.time()
                 if now - _dbg_last_log > 3.0:
                     if _dbg_count > 0:
                         self.logger.debug(
-                            f"[BLE TX DEBUG] {_dbg_count} notifs in 3s "
+                            f"[BLE TX DEBUG] {_dbg_count} chunks in 3s "
                             f"({_dbg_count / 3:.1f}/s) | "
                             f"notify avg={_dbg_total_notify / _dbg_count * 1000:.1f}ms "
                             f"max={_dbg_max_notify * 1000:.1f}ms"
