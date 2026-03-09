@@ -61,16 +61,17 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.02
       yaw_goal_tolerance: 0.40
       stateful: True
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      # time_steps >= 21 で Savitzky-Golay スムージングフィルタが有効になる
-      time_steps: 24
+      # ホライズン = time_steps * model_dt = 5 * 0.2 = 1.0s
+      # 短いホライズンをbatch_size・iteration_countの増加で補う
+      time_steps: 5
       model_dt: 0.2
-      batch_size: 800
+      batch_size: 400
       vx_std: 0.5
       vy_std: 0.25
       wz_std: 0.2
@@ -80,10 +81,10 @@ controller_server:
       vy_min: -1.5
       wz_max: 3.5
       motion_model: "Omni"
-      iteration_count: 5
+      iteration_count: 1
       prune_distance: 2.5
       transform_tolerance: 0.2
-      temperature: 0.5
+      temperature: 0.3
       gamma: 0.015
       # /optimal_trajectory (採用経路) と /trajectories (全サンプル) を配信。
       # RViz2 では /trajectories を非表示にして /optimal_trajectory のみ表示する
@@ -112,7 +113,7 @@ controller_server:
       GoalCritic.enabled: true
       GoalCritic.cost_power: 1
       GoalCritic.cost_weight: 8.0
-      GoalCritic.threshold_to_consider: 1.5
+      GoalCritic.threshold_to_consider: 0.8
       GoalAngleCritic.enabled: true
       GoalAngleCritic.cost_power: 1
       GoalAngleCritic.cost_weight: 2.0
