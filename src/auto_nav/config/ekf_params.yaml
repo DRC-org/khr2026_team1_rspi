@@ -1,7 +1,7 @@
 ekf_filter_node:
   ros__parameters:
-    frequency: 10.0
-    sensor_timeout: 0.1
+    frequency: 50.0
+    sensor_timeout: 0.02
     two_d_mode: true  # z/roll/pitch を無視
 
     map_frame: map

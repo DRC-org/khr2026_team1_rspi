@@ -26,7 +26,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 MPPI_TIME_STEPS = 8
 
 # 直接アプローチ用定数
-DIRECT_APPROACH_DIST = 0.3      # Nav2 → 直接アプローチに切り替える距離 [m]
+DIRECT_APPROACH_DIST = 0.0      # 0.0 = 無効（MPPI が最後まで制御）
 GOAL_REACHED_DIST = 0.02        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
 

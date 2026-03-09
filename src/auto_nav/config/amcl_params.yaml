@@ -12,7 +12,7 @@ amcl:
 
     # --- パーティクル数（フィールドサイズ: ~30m² / 競技時間優先で少なめ） ---
     min_particles: 500
-    max_particles: 2000
+    max_particles: 3000
 
     # --- モーションモデル（全方向移動ロボット用） ---
     robot_model_type: "nav2_amcl::OmniMotionModel"
@@ -50,7 +50,7 @@ amcl:
     transform_tolerance: 1.0
 
     # --- フィルタ更新条件（並進 15cm 以上または回転 5.7° 以上移動後に更新） ---
-    update_min_d: 0.15
+    update_min_d: 0.05
     update_min_a: 0.10
     resample_interval: 1
     pf_err: 0.05
