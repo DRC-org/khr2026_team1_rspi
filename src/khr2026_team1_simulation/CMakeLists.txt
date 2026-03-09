@@ -10,6 +10,7 @@ install(DIRECTORY launch urdf worlds config maps
 install(PROGRAMS
   scripts/invert_cmd_vel.py
   scripts/generate_field_sdf.py
+  scripts/auto_bt_sequence_sim.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
