@@ -236,7 +236,8 @@ waypoints:
     theta: -1.5707
     on_arrive:
       - action: yagura_approach
-        approach_dist: 0.14    # 右ハンド offset: 櫓がロボット北0.14mに来る
+        hand_offset_x: 0.35    # 東方向: 櫓がロボット東0.35mに来る
+        hand_offset_y: 0.14    # 北方向: 櫓がロボット北0.14mに来る
         timeout: 30.0
       - action: hand_control
         target: "yagura_1"
