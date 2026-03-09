@@ -6,9 +6,8 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /Map1
         - /Map1/Topic1
-        - /Path2/Topic1
+        - /Path2
       Splitter Ratio: 0.5
     Tree Height: 635
   - Class: rviz_common/Selection
@@ -241,8 +240,8 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Best Effort
-        Value: local_plan
+        Reliability Policy: Reliable
+        Value: optimal_trajectory
       Value: true
   Enabled: true
   Global Options:
@@ -290,16 +289,16 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 8.887784004211426
+      Distance: 9.210591316223145
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.026267671957612038
-        Y: 3.516680955886841
-        Z: 0.0014469780726358294
+        X: 0.026339665055274963
+        Y: 3.5098319053649902
+        Z: 0.0020138113759458065
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
@@ -308,7 +307,7 @@ Visualization Manager:
       Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 4.713342189788818
+      Yaw: 4.713341236114502
     Saved: ~
 Window Geometry:
   Displays:
