@@ -146,15 +146,6 @@ waypoints:
     theta: -1.5707
     on_arrive:
       - action: hand_control
-        target: "ring_1"
-        control_type: "pos"
-        action_value: "yagura"
-      - action: wait_actuator
-        target: "ring_1"
-        control_type: "pos"
-        value: "yagura_done"
-        timeout: 10.0
-      - action: hand_control
         target: "yagura_1"
         control_type: "pos"
         action_value: "down"
@@ -162,6 +153,15 @@ waypoints:
         target: "yagura_1"
         control_type: "pos"
         value: "down_done"
+        timeout: 10.0
+      - action: hand_control
+        target: "ring_1"
+        control_type: "pos"
+        action_value: "yagura"
+      - action: wait_actuator
+        target: "ring_1"
+        control_type: "pos"
+        value: "yagura_done"
         timeout: 10.0
       - action: hand_control
         target: "yagura_1"
@@ -188,15 +188,6 @@ waypoints:
     theta: -1.5707
     on_arrive:
       - action: hand_control
-        target: "ring_2"
-        control_type: "pos"
-        action_value: "yagura"
-      - action: wait_actuator
-        target: "ring_2"
-        control_type: "pos"
-        value: "yagura_done"
-        timeout: 10.0
-      - action: hand_control
         target: "yagura_2"
         control_type: "pos"
         action_value: "down"
@@ -204,6 +195,15 @@ waypoints:
         target: "yagura_2"
         control_type: "pos"
         value: "down_done"
+        timeout: 10.0
+      - action: hand_control
+        target: "ring_2"
+        control_type: "pos"
+        action_value: "yagura"
+      - action: wait_actuator
+        target: "ring_2"
+        control_type: "pos"
+        value: "yagura_done"
         timeout: 10.0
       - action: hand_control
         target: "yagura_2"
@@ -318,15 +318,6 @@ waypoints:
     theta: -1.5707
     on_arrive:
       - action: hand_control
-        target: "ring_1"
-        control_type: "pos"
-        action_value: "yagura"
-      - action: wait_actuator
-        target: "ring_1"
-        control_type: "pos"
-        value: "yagura_done"
-        timeout: 10.0
-      - action: hand_control
         target: "yagura_1"
         control_type: "pos"
         action_value: "down"
@@ -334,6 +325,15 @@ waypoints:
         target: "yagura_1"
         control_type: "pos"
         value: "down_done"
+        timeout: 10.0
+      - action: hand_control
+        target: "ring_1"
+        control_type: "pos"
+        action_value: "yagura"
+      - action: wait_actuator
+        target: "ring_1"
+        control_type: "pos"
+        value: "yagura_done"
         timeout: 10.0
       - action: hand_control
         target: "yagura_1"
