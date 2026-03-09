@@ -371,11 +371,11 @@ class RoutingNode(Node):
                 px = cos_y * yagura_pos.point.x - sin_y * yagura_pos.point.y + tx
                 py = sin_y * yagura_pos.point.x + cos_y * yagura_pos.point.y + ty
 
-                # 右ハンド位置: 櫓がロボット北0.14m・東0.35mに来るよう配置
-                # → ロボット中心は櫓の南0.14m・西0.35mに止まる
-                hand_offset_x = float(act.get("hand_offset_x", 0.35))  # 東方向オフセット[m]
+                # 西ハンド位置: 櫓がロボット北0.14m・西0.35mに来るよう配置
+                # → ロボット中心は櫓の南0.14m・東0.35mに止まる
+                hand_offset_x = float(act.get("hand_offset_x", 0.35))  # 西方向オフセット[m]
                 hand_offset_y = float(act.get("hand_offset_y", 0.14))  # 北方向オフセット[m]
-                goal_x = px - hand_offset_x
+                goal_x = px + hand_offset_x
                 goal_y = py - hand_offset_y
                 goal_theta = -math.pi / 2.0
 
