@@ -4,6 +4,7 @@ import os
 import threading
 import time
 
+import numpy as np
 import rclpy.duration
 import rclpy.time
 import tf2_ros
@@ -50,6 +51,13 @@ YAW_TOLERANCE = 0.04  # ゴール到達判定の角度許容誤差 [rad] ≈ 2.3
 LIDAR_FORWARD_ANGLE = 0.35  # 前方スキャン半角 [rad] ≈ 20°
 LIDAR_STOP_DIST = 0.05      # 前方障害物検知で停止する距離 [m]
 MS_TO_RPM = (60.0 * GEAR_RATIO) / (2.0 * math.pi * WHEEL_RADIUS)
+
+# 壁際後退: 壁密着 waypoint から次へ向かう前にロボットを後退させる
+# inscribed_radius(0.25m) を超える距離が必要
+WALL_BACK_OFF_DIST = 0.35       # 後退距離 [m]
+BACK_OFF_SPEED = 0.5            # 後退速度 [m/s]
+BACK_OFF_TIMEOUT = 5.0          # 後退タイムアウト [s]
+BACK_OFF_REACHED_DIST = 0.05    # 後退到達判定距離 [m]
 
 _YAGURA_POS_MAP = {"up": 0, "down": 1, "stopped": 2, "up_done": 3, "down_done": 4}
 _YAGURA_STATE_MAP = {"open": 0, "close": 1, "stopped": 2, "open_done": 3, "close_done": 4}
@@ -106,14 +114,14 @@ class RoutingNode(Node):
 
         self._robot_pos = {"x": 0.0, "y": 0.0, "angle": 0.0}
         self._sub_odom = self.create_subscription(Odometry, "/odom", self._on_odom, 10)
-        self._timer_pos = self.create_timer(0.2, self._publish_robot_pos)
+        self._timer_pos = self.create_timer(0.5, self._publish_robot_pos)
 
         self._action_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         self._pub_markers = self.create_publisher(MarkerArray, "/waypoint_markers", 10)
-        self.create_timer(1.0, self._publish_waypoint_markers)
+        self.create_timer(5.0, self._publish_waypoint_markers)
 
         self._pub_wheel = self.create_publisher(WheelMessage, "wheel_control", 10)
         self._approach_goal_xy: tuple[float, float] | None = None
@@ -130,10 +138,13 @@ class RoutingNode(Node):
         self._clear_costmap_client = self.create_client(
             ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap"
         )
+        self._clear_global_costmap_client = self.create_client(
+            ClearEntireCostmap, "/global_costmap/clear_entirely_global_costmap"
+        )
         self._amcl_params_client = self.create_client(
             SetParameters, "/amcl/set_parameters"
         )
-        self.create_timer(0.05, self._on_approach_timer)
+        self.create_timer(0.2, self._on_approach_timer)
 
         self._hand_fb_list: list[HandMessage] = []
         self._hand_fb_lock = threading.Lock()
@@ -162,6 +173,8 @@ class RoutingNode(Node):
     def _on_hand_feedback(self, msg: HandMessage) -> None:
         with self._hand_fb_lock:
             self._hand_fb_list.append(msg)
+            if len(self._hand_fb_list) > 100:
+                self._hand_fb_list = self._hand_fb_list[-50:]
 
     def _on_yagura_pos(self, msg: PointStamped) -> None:
         with self._yagura_pos_lock:
@@ -275,7 +288,7 @@ class RoutingNode(Node):
 
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = "map"
-        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.header.stamp = rclpy.time.Time().to_msg()
         goal.pose.pose.position.x = x
         goal.pose.pose.position.y = y
         # yaw → quaternion（z 軸周りのみ）
@@ -315,6 +328,7 @@ class RoutingNode(Node):
     def _retry_send_goal(self) -> None:
         if self._pending_goal_xyz and self._state == "NAVIGATING":
             self._clear_local_costmap()
+            self._clear_global_costmap()
             x, y, theta = self._pending_goal_xyz
             self._send_goal_impl(x, y, theta)
 
@@ -552,12 +566,11 @@ class RoutingNode(Node):
             })))
             self._auto_seq_index += 1
             if self._auto_seq_index < len(self._auto_seq_names):
-                # 到着ウェイポイントの既知座標で自己位置を再アンカーし、
-                # コストマップをクリアしてから次ゴールへ（壁際ウェイポイント対策）
-                self._publish_initial_pose_at_waypoint(self._current_goal_name)
-                self._clear_local_costmap()
-                t = threading.Timer(1.0, self._advance_auto_sequence)
-                t.daemon = True
+                # 壁密着 waypoint から次へ向かう前に後退して inscribed ゾーンを脱出
+                t = threading.Thread(
+                    target=self._back_off_and_advance,
+                    daemon=True,
+                )
                 t.start()
                 return
             else:
@@ -695,7 +708,7 @@ class RoutingNode(Node):
                     "seq_index": from_index,
                     "seq_total": len(self._auto_seq_names),
                 })))
-            time.sleep(0.2)
+            time.sleep(1.0)
 
         if not tf_ready:
             self.get_logger().warn("map→odom TF not available after timeout, proceeding anyway")
@@ -952,24 +965,167 @@ class RoutingNode(Node):
         if scan is None:
             return None
 
-        min_dist = float("inf")
-        angle = scan.angle_min
-        for r in scan.ranges:
-            # approach_angle_base_link を中心とした ±LIDAR_FORWARD_ANGLE 内のみ対象
-            diff = math.atan2(math.sin(angle - approach_angle_base_link),
-                              math.cos(angle - approach_angle_base_link))
-            if abs(diff) <= LIDAR_FORWARD_ANGLE:
-                if math.isfinite(r) and scan.range_min <= r <= scan.range_max:
-                    min_dist = min(min_dist, r)
-            angle += scan.angle_increment
+        ranges = np.array(scan.ranges, dtype=np.float32)
+        n = len(ranges)
+        angles = scan.angle_min + np.arange(n, dtype=np.float32) * scan.angle_increment
 
-        return min_dist if math.isfinite(min_dist) else None
+        diff = np.arctan2(np.sin(angles - approach_angle_base_link),
+                          np.cos(angles - approach_angle_base_link))
+        valid = (np.abs(diff) <= LIDAR_FORWARD_ANGLE) & np.isfinite(ranges) & \
+                (ranges >= scan.range_min) & (ranges <= scan.range_max)
+
+        if not np.any(valid):
+            return None
+        return float(np.min(ranges[valid]))
 
     def _clear_local_costmap(self) -> None:
         if not self._clear_costmap_client.service_is_ready():
             self.get_logger().warn("clear_costmap service not ready, skipping")
             return
         self._clear_costmap_client.call_async(ClearEntireCostmap.Request())
+
+    def _clear_global_costmap(self) -> None:
+        if not self._clear_global_costmap_client.service_is_ready():
+            self.get_logger().warn("clear_global_costmap service not ready, skipping")
+            return
+        self._clear_global_costmap_client.call_async(ClearEntireCostmap.Request())
+
+    def _compute_back_off_direction(self) -> float | None:
+        """LiDAR 近傍障害物の加重平均方向から、逆方向（base_link 座標系）を算出する。
+
+        inscribed_radius + マージン（0.5m）以内の全障害物点を 1/r² で加重平均し、
+        その重心と逆方向を返す。複数の壁に挟まれている場合は斜めに離れる。
+        """
+        _NEAR_THRESHOLD = 0.5
+        with self._scan_lock:
+            scan = self._latest_scan
+        if scan is None:
+            return None
+
+        ranges = np.array(scan.ranges, dtype=np.float32)
+        n = len(ranges)
+        angles = scan.angle_min + np.arange(n, dtype=np.float32) * scan.angle_increment
+
+        valid = np.isfinite(ranges) & (ranges >= scan.range_min) & \
+                (ranges <= scan.range_max) & (ranges < _NEAR_THRESHOLD)
+
+        if not np.any(valid):
+            return None
+
+        r_valid = ranges[valid]
+        a_valid = angles[valid]
+        w = 1.0 / (r_valid * r_valid)
+        wx = float(np.sum(w * np.cos(a_valid)))
+        wy = float(np.sum(w * np.sin(a_valid)))
+
+        obstacle_angle = math.atan2(wy, wx)
+        return obstacle_angle + math.pi
+
+    def _back_off_and_advance(self) -> None:
+        """壁密着 waypoint から後退し、コストマップクリア後に次の waypoint へ進む。
+
+        LiDAR 近傍障害物の加重平均逆方向に後退して
+        inscribed ゾーンを脱出してから Nav2 ゴールを送信する。
+        """
+        back_off_local = self._compute_back_off_direction()
+
+        try:
+            tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        except Exception:
+            self.get_logger().warn("Back-off: TF not available, skipping back-off")
+            self._clear_local_costmap()
+            self._clear_global_costmap()
+            time.sleep(1.0)
+            self._advance_auto_sequence()
+            return
+
+        robot_x = tf.transform.translation.x
+        robot_y = tf.transform.translation.y
+        qz = tf.transform.rotation.z
+        qw = tf.transform.rotation.w
+        yaw = 2.0 * math.atan2(qz, qw)
+
+        if back_off_local is not None:
+            # base_link → map 座標系に変換（back_off_local は既に逆方向）
+            back_dir = yaw + back_off_local
+        else:
+            # LiDAR 取得不可: waypoint theta の逆方向にフォールバック
+            wp = self._waypoints.get(self._current_goal_name, {})
+            _, _, theta = self._apply_court_transform(
+                wp.get("x", 0), wp.get("y", 0), wp.get("theta", 0)
+            )
+            back_dir = theta + math.pi
+
+        target_x = robot_x + WALL_BACK_OFF_DIST * math.cos(back_dir)
+        target_y = robot_y + WALL_BACK_OFF_DIST * math.sin(back_dir)
+
+        self.get_logger().info(
+            f"Back-off from wall: ({robot_x:.2f},{robot_y:.2f}) → "
+            f"({target_x:.2f},{target_y:.2f})"
+        )
+
+        deadline = time.monotonic() + BACK_OFF_TIMEOUT
+        dt = 0.05
+
+        while time.monotonic() < deadline:
+            if self._sequence_abort.is_set():
+                self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
+                return
+
+            try:
+                tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+            except Exception:
+                time.sleep(dt)
+                continue
+
+            rx = tf.transform.translation.x
+            ry = tf.transform.translation.y
+            dx = target_x - rx
+            dy = target_y - ry
+            dist = math.hypot(dx, dy)
+
+            if dist < BACK_OFF_REACHED_DIST:
+                self.get_logger().info(f"Back-off complete (dist={dist:.3f}m)")
+                break
+
+            cur_qz = tf.transform.rotation.z
+            cur_qw = tf.transform.rotation.w
+            current_yaw = 2.0 * math.atan2(cur_qz, cur_qw)
+            cos_yaw = math.cos(-current_yaw)
+            sin_yaw = math.sin(-current_yaw)
+            dx_local = cos_yaw * dx - sin_yaw * dy
+            dy_local = sin_yaw * dx + cos_yaw * dy
+
+            vx = KP_POS * dx_local
+            vy = KP_POS * dy_local
+            speed = math.hypot(vx, vy)
+            if speed > BACK_OFF_SPEED:
+                vx = vx / speed * BACK_OFF_SPEED
+                vy = vy / speed * BACK_OFF_SPEED
+
+            vy_c = vy * 1.35
+            v_fl = +vx - vy_c
+            v_fr = -vx - vy_c
+            v_rl = +vx + vy_c
+            v_rr = -vx + vy_c
+            rpms = [v * MS_TO_RPM for v in (v_fl, v_fr, v_rl, v_rr)]
+            max_abs = max(abs(r) for r in rpms)
+            if max_abs > MAX_RPM:
+                scale = MAX_RPM / max_abs
+                rpms = [r * scale for r in rpms]
+
+            self._publish_wheel_rpms(*rpms)
+            time.sleep(dt)
+        else:
+            self.get_logger().warn("Back-off timeout, proceeding anyway")
+
+        self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
+
+        self._publish_initial_pose_at_waypoint(self._current_goal_name)
+        self._clear_local_costmap()
+        self._clear_global_costmap()
+        time.sleep(1.0)
+        self._advance_auto_sequence()
 
     def _set_mppi_time_steps(self, steps: int) -> None:
         if steps == self._current_time_steps:

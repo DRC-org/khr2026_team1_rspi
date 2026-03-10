@@ -103,8 +103,8 @@ class RobotController(Node):
 
         # ESP32 にコマンドを 50 ms ごとに送信する
         self.create_timer(0.05, self.send_control_command)
-        # コントローラにフィードバックを 200 ms ごとに送信する (5Hz)
-        self.create_timer(0.2, self.send_controller_feedback)
+        # コントローラにフィードバックを 500 ms ごとに送信する (2Hz)
+        self.create_timer(0.5, self.send_controller_feedback)
 
         self.get_logger().info("Robot Controller Node initialized")
 

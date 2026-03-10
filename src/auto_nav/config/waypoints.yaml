@@ -22,7 +22,7 @@ waypoints:
 
   yagura_pickup_1:
     x: 1.404
-    y: 0.25
+    y: 0.35
     theta: -1.5707
     on_arrive:
       - action: hand_control

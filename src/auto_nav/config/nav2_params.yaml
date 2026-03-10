@@ -94,7 +94,7 @@ controller_server:
       # → INSCRIBED/インフレーションゾーンを collision_cost で全部潰さない
       CostCritic.enabled: true
       CostCritic.cost_power: 1
-      CostCritic.cost_weight: 3.81
+      CostCritic.cost_weight: 2.5
       CostCritic.critical_cost: 300.0
       CostCritic.consider_footprint: false
       CostCritic.collision_cost: 1000000.0
@@ -232,28 +232,28 @@ local_costmap:
       resolution: 0.05
       # フットプリント実寸: 中心→前後 0.25m、中心→左右 0.29m
       footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
+      plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
+        # LiDAR 傾きによる孤立ノイズ対策: combination_method=1 (Max) で
+        # 単発のスキャンだけでは致命的コストにならないよう抑制
+        combination_method: 1
         observation_sources: scan
         scan:
           topic: /scan_filtered
           max_obstacle_height: 2.0
+          min_obstacle_height: 0.0
           clearing: true
           marking: true
           data_type: "LaserScan"
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
+          obstacle_max_range: 2.0
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        # ロボット外接円 0.397m より大きくする必要がある（Nav2 警告対応）
-        # 壁際ゴールへの到達性は xy_goal_tolerance と GoalCritic で確保
+        # LiDAR ノイズ由来の孤立障害物セルの影響範囲を縮小
+        cost_scaling_factor: 5.0
         inflation_radius: 0.42
       always_send_full_costmap: true

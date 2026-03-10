@@ -64,16 +64,25 @@ class YaguraPositionNode(Node):
         ]
         self._pub_marker = self.create_publisher(MarkerArray, "yagura_markers", 10)
 
+        self._r_target = self.get_parameter("cylinder_radius").value
+        self._r_tol = self.get_parameter("radius_tolerance").value
+        self._min_r = self.get_parameter("min_range").value
+        self._max_r = self.get_parameter("max_range").value
+        self._gap = self.get_parameter("cluster_gap").value
+        self._min_pts = int(self.get_parameter("min_cluster_points").value)
+        self._target_frame = self.get_parameter("target_frame").value
+        self._max_yagura = int(self.get_parameter("max_yagura").value)
+
         self.get_logger().info("YaguraPosition initialized (Phi114mm, all directions, max 3)")
 
     def _on_scan(self, msg: LaserScan) -> None:
-        r_target = self.get_parameter("cylinder_radius").value
-        r_tol = self.get_parameter("radius_tolerance").value
-        min_r = self.get_parameter("min_range").value
-        max_r = self.get_parameter("max_range").value
-        gap = self.get_parameter("cluster_gap").value
-        min_pts = int(self.get_parameter("min_cluster_points").value)
-        target_frame = self.get_parameter("target_frame").value
+        r_target = self._r_target
+        r_tol = self._r_tol
+        min_r = self._min_r
+        max_r = self._max_r
+        gap = self._gap
+        min_pts = self._min_pts
+        target_frame = self._target_frame
 
         try:
             tf = self._tf_buffer.lookup_transform(
@@ -97,25 +106,34 @@ class YaguraPositionNode(Node):
         tx = tf.transform.translation.x
         ty = tf.transform.translation.y
 
-        max_yagura = int(self.get_parameter("max_yagura").value)
+        max_yagura = self._max_yagura
 
-        # 前方 ±60° の点を base_link 座標に変換
-        points_base = []
-        for i, r in enumerate(msg.ranges):
-            if not (min_r <= r <= max_r) or not math.isfinite(r):
-                continue
-            angle = msg.angle_min + i * msg.angle_increment
-            xl = r * math.cos(angle)
-            yl = r * math.sin(angle)
-            xb = cos_y * xl - sin_y * yl + tx
-            yb = sin_y * xl + cos_y * yl + ty
-            heading = math.atan2(yb, xb)
-            diff = abs(math.atan2(
-                math.sin(heading - _FRONT_CENTER_RAD),
-                math.cos(heading - _FRONT_CENTER_RAD),
-            ))
-            if diff <= _FRONT_HALF_RAD:
-                points_base.append((xb, yb))
+        ranges = np.array(msg.ranges, dtype=np.float32)
+        n = len(ranges)
+        angles = msg.angle_min + np.arange(n, dtype=np.float32) * msg.angle_increment
+
+        valid = np.isfinite(ranges) & (ranges >= min_r) & (ranges <= max_r)
+        if np.count_nonzero(valid) < min_pts:
+            return
+
+        r_v = ranges[valid]
+        a_v = angles[valid]
+        xl = r_v * np.cos(a_v)
+        yl = r_v * np.sin(a_v)
+        xb = cos_y * xl - sin_y * yl + tx
+        yb = sin_y * xl + cos_y * yl + ty
+
+        headings = np.arctan2(yb, xb)
+        diff = np.abs(np.arctan2(
+            np.sin(headings - _FRONT_CENTER_RAD),
+            np.cos(headings - _FRONT_CENTER_RAD),
+        ))
+        front = diff <= _FRONT_HALF_RAD
+
+        if np.count_nonzero(front) < min_pts:
+            return
+
+        points_base = list(zip(xb[front].tolist(), yb[front].tolist()))
 
         if len(points_base) < min_pts:
             return

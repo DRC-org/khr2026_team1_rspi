@@ -1,24 +1,33 @@
 # LiDAR スキャンフィルタ設定
 #
-# 目的: ロボット自身のタイヤがスキャン平面に映り込み、
-#       コストマップで自分自身を障害物と認識する問題を防ぐ。
+# フィルタチェーン:
+#   filter1: SpeckleFilter — LiDAR 傾きによる孤立ノイズ点を除去
+#   filter2: StaticLaserScanPolygonFilter — ロボット本体（タイヤ）の映り込みを除去
 #
-# 方法: StaticLaserScanPolygonFilter で機体形状（矩形）内の点を除去する。
-#       ポリゴンは base_link 座標系で定義し、起動時に laser_frame へ TF 変換してキャッシュ。
-#       Nav2 フットプリント [[0.25, 0.29], ...] + padding 0.03m でタイヤ映り込みをカバー。
+# SpeckleFilter:
+#   LiDAR が若干傾いて設置されているため、地面反射による孤立点が発生し
+#   コストマップが偽障害物を認識する問題を防ぐ。
+#   隣接スキャン点との距離差で孤立点を判定（max_range_difference=0.10m, window=3）。
+#   実障害物（壁・柱）は連続した点群のため影響しない。
 #
-# 利点: 距離ベース（旧 LaserScanRangeFilter, 0.33m 未満全除去）と異なり、
-#       機体外の近距離障害物（0.33m 以内の壁等）を検出できる。
+# StaticLaserScanPolygonFilter:
+#   base_link 座標系でロボット矩形内の点を除去。
+#   Nav2 フットプリント [[0.25, 0.29], ...] + padding 0.03m でタイヤ映り込みをカバー。
+#   起動時1回のみ TF 取得のため安定動作する。
 #
 # 前提: base_link → laser_frame の静的 TF が配信されていること（auto_nav_launch.py で設定済み）
-#
-# 経緯:
-#   - LaserScanFootprintFilter は毎スキャン TF 取得のためサイレント失敗を確認（2026-02-22）
-#   - StaticLaserScanPolygonFilter は起動時1回のみ TF 取得のため安定動作する
 
 scan_to_scan_filter_chain:
   ros__parameters:
     filter1:
+      name: speckle_filter
+      type: laser_filters/LaserScanSpeckleFilter
+      params:
+        filter_type: 0
+        max_range: 0.0
+        max_range_difference: 0.10
+        filter_window: 3
+    filter2:
       name: footprint_filter
       type: laser_filters/StaticLaserScanPolygonFilter
       params:

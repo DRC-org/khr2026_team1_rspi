@@ -512,6 +512,33 @@ ros2 topic echo /yagura_position_2
 
 ### 2026-03-10
 
+- **壁密着 waypoint からの経路生成失敗を修正**（`routing_node.py`）
+  - **問題**: 壁に密着した waypoint（例: `yagura_pickup_1` y=0.25）に到着後、次の waypoint への経路生成に失敗する
+  - **原因**: ロボット中心が壁から 0.212m の位置にあり、グローバルコストマップの inscribed ゾーン（inscribed_radius=0.25m）内。SmacPlanner2D がスタート地点を「衝突状態」と判定し経路を生成できず、MPPI も壁が近すぎて有効な軌道を生成できない。ローカルコストマップのクリアのみでは壁は物理的に存在するため効果なし
+  - **修正内容**:
+    1. `_find_nearest_wall_angle()` メソッド追加: LiDAR スキャンから最も近い障害物の方向（base_link 座標系）を検出
+    2. `_back_off_and_advance()` メソッド追加: LiDAR 最近傍の逆方向に 0.35m 後退（LiDAR 不可時は theta 逆方向にフォールバック）。P 制御で位置フィードバック、速度 0.5 m/s
+    3. `_clear_global_costmap()` メソッド追加: グローバルコストマップもクリア
+    4. `_on_sequence_done()` 変更: `threading.Timer(1.0, ...)` → `_back_off_and_advance()` スレッドに置き換え
+    5. `_retry_send_goal()` 変更: ローカルに加えグローバルコストマップもクリア
+  - **定数**: `WALL_BACK_OFF_DIST=0.35m`, `BACK_OFF_SPEED=0.5m/s`, `BACK_OFF_TIMEOUT=5.0s`, `BACK_OFF_REACHED_DIST=0.05m`
+  - ビルド不要（symlink-install 済み、ノード再起動のみ）
+
+  確認ログ:
+  ```
+  "Back-off from wall: (X.XX,Y.YY) → (X.XX,Y.YY)"
+  "Back-off complete (dist=X.XXXm)"
+  ```
+
+  確認コマンド:
+  ```bash
+  ros2 launch auto_nav auto_nav_launch.py
+  ros2 run auto_nav nav_cli.py -- mode auto
+  ros2 run auto_nav nav_cli.py -- court blue
+  ros2 run auto_nav nav_cli.py -- start
+  # yagura_pickup_1 到着後にログで Back-off を確認し、次の ring_pickup_1 への経路生成が成功することを確認
+  ```
+
 - **`yagura_approach` アクション追加**（`routing_node.py`）
   - **概要**: `on_arrive` シーケンス内で `yagura_position_0` トピックの検出座標を使い、LiDAR 検出した櫓に対して自動アプローチするネスト航行アクション
   - **仕組み**:
