@@ -79,7 +79,7 @@ class BluetoothROS2Node(Node):
         self.get_logger().debug(f"Published Bluetooth RX: {data}")
 
     def on_tx_message(self, msg: String):
-        if self.ble_server and self.event_loop:
+        if self.ble_server and self.event_loop and self.event_loop.is_running():
             self.get_logger().debug(f"Received TX message: {msg.data}")
             # Buffer latest data; the BLE event loop's periodic task will send it.
             # Using call_soon_threadsafe instead of run_coroutine_threadsafe

@@ -126,7 +126,7 @@ def main() -> None:
     print(f"  壁厚: {wall_thickness_m} m, 解像度: {resolution} m/cell")
     print(f"  マップ原点: ({origin_x}, {origin_y})")
 
-    output_dir = Path("/home/pi/maps")
+    output_dir = Path.home() / "maps"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     pgm_path = output_dir / "field_synthetic.pgm"

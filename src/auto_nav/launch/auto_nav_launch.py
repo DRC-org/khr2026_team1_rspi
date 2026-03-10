@@ -75,8 +75,8 @@ def generate_launch_description():
 
     map_arg = DeclareLaunchArgument(
         "map",
-        default_value="/home/pi/maps/field_synthetic.yaml",
-        description="map_server に渡すマップ YAML パス。例: /home/pi/maps/field_synthetic.yaml",
+        default_value=os.path.expanduser("~/maps/field_synthetic.yaml"),
+        description="map_server に渡すマップ YAML パス。例: ~/maps/field_synthetic.yaml",
     )
 
     debug_arg = DeclareLaunchArgument(
