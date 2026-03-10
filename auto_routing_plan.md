@@ -467,6 +467,49 @@ ros2 topic echo /yagura_position_2
 
 ## 10. 作業記録（最新が上）
 
+### 2026-03-10（2回目）
+
+- **ESP32 micro-ROS シリアル接続の単体テスト・トラブルシューティング**
+
+  **症状**: `drc-robot` サービス経由では cwmc/hwmc 両方接続できるが、手動テストスクリプトで `wheel_feedback` / `hand_feedback` が受信できなかった。
+
+  **原因**: 手動テスト時に以下の 3 条件が揃っていなかったため。
+  1. **ESP32 ハードウェアリセット未実施** — agent 起動前に DTR/RTS トグルで ESP32 をリセットしないと、stale セッションが残りエンティティ作成が停滞する。`auto_nav_launch.py` では `reset_esp32_serial.py` → `OnProcessExit` → agent 起動の順で自動化されている
+  2. **FastRTPS 共有メモリの残骸** — 前回の不正終了で `/dev/shm/fastrtps_*` が残存。`ros2_start.sh` では起動時に `rm -f` で掃除している
+  3. **`RMW_IMPLEMENTATION=rmw_fastrtps_cpp` 未設定** — micro_ros_agent は FastRTPS 前提でビルドされている。未設定だと CycloneDDS がデフォルトになり、セッションは確立するがエンティティ作成で DDS レイヤーが不一致になる
+
+  **正しい手動テスト手順**:
+  ```bash
+  # 1. サービス停止
+  sudo systemctl stop drc-robot
+
+  # 2. 共有メモリ掃除
+  rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*
+
+  # 3. 環境設定
+  source /opt/ros/jazzy/setup.bash
+  source /home/pi/DRC/khr2026_team1_rspi/install/setup.bash
+  export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+  # 4. ESP32 リセット（DTR/RTS トグル + 2秒待ち）
+  python3 src/auto_nav/scripts/reset_esp32_serial.py /dev/esp32_c
+
+  # 5. agent 起動（バックグラウンド）
+  micro_ros_agent serial --dev /dev/esp32_c -v4 &
+
+  # 6. 15秒待ってからトピック確認
+  sleep 15
+  ros2 topic echo wheel_feedback --once --no-daemon
+  ```
+
+  **テスト結果**: 上記手順で cwmc (`wheel_feedback`) / hwmc (`hand_feedback`) 両方正常受信を確認。
+
+  **補足**:
+  - シンボリックリンク: `/dev/esp32_c` → `ttyUSB2`（cwmc）, `/dev/esp32_h` → `ttyUSB1`（hwmc） — udev ルールで固定済み
+  - ESP32 の `MicroROSTask` は 30 秒間 agent に接続できないと `esp_restart()` を呼ぶ（自動復旧）
+  - Serial transport 使用時は `Serial.print()` 禁止（`#if MICRO_ROS_TRANSPORT_ARDUINO_SERIAL != 1` で制御済み）
+  - テストスクリプト: `/home/pi/DRC/test_esp32_serial.py`（ポート生存確認）, `/home/pi/DRC/test_esp32_feedback.py`（feedback トピック確認）
+
 ### 2026-03-10
 
 - **`yagura_approach` アクション追加**（`routing_node.py`）
