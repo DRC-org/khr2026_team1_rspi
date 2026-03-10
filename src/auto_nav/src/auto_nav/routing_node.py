@@ -26,7 +26,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 MPPI_TIME_STEPS = 8
 
 # 直接アプローチ用定数
-DIRECT_APPROACH_DIST = 0.3      # 0.3m 以内で直接アプローチに切り替え
+DIRECT_APPROACH_DIST = 0.5      # 0.5m 以内で直接アプローチに切り替え
 GOAL_REACHED_DIST = 0.02        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
 
@@ -130,6 +130,9 @@ class RoutingNode(Node):
         self._clear_costmap_client = self.create_client(
             ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap"
         )
+        self._amcl_params_client = self.create_client(
+            SetParameters, "/amcl/set_parameters"
+        )
         self.create_timer(0.05, self._on_approach_timer)
 
         self._hand_fb_list: list[HandMessage] = []
@@ -143,8 +146,6 @@ class RoutingNode(Node):
         self._sub_yagura = self.create_subscription(
             PointStamped, "yagura_position_0", self._on_yagura_pos, 10
         )
-
-        self._last_initialpose_pub: float = 0.0
 
         self._approach_done_event: threading.Event | None = None
         self._approach_success: bool = False
@@ -857,31 +858,11 @@ class RoutingNode(Node):
                 if self._goal_handle:
                     self._goal_handle.cancel_goal_async()
                     self._goal_handle = None
+                self._set_amcl_direct_approach_params()
+                self._publish_initialpose_once()
                 return
 
             return
-
-        # DIRECT_APPROACH 状態: 0.5 秒ごとに現在 TF 位置を /initialpose に publish して AMCL を収束させる
-        now_mono = time.monotonic()
-        if now_mono - self._last_initialpose_pub >= 0.5:
-            self._last_initialpose_pub = now_mono
-            msg = PoseWithCovarianceStamped()
-            msg.header.frame_id = "map"
-            msg.header.stamp = (
-                self.get_clock().now() - rclpy.duration.Duration(seconds=0.5)
-            ).to_msg()
-            try:
-                map_tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
-                msg.pose.pose.position.x = map_tf.transform.translation.x
-                msg.pose.pose.position.y = map_tf.transform.translation.y
-                msg.pose.pose.orientation.z = map_tf.transform.rotation.z
-                msg.pose.pose.orientation.w = map_tf.transform.rotation.w
-                msg.pose.covariance[0] = 0.05
-                msg.pose.covariance[7] = 0.05
-                msg.pose.covariance[35] = 0.02
-                self._pub_initial_pose.publish(msg)
-            except Exception:
-                pass
 
         qz = tf.transform.rotation.z
         qw = tf.transform.rotation.w
@@ -918,6 +899,7 @@ class RoutingNode(Node):
                 )
             self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
             self._approach_goal_xy = None
+            self._restore_amcl_default_params()
 
             wp = self._waypoints.get(self._current_goal_name, {})
             on_arrive = wp.get("on_arrive", [])
@@ -1008,6 +990,75 @@ class RoutingNode(Node):
         future.add_done_callback(
             lambda f: self.get_logger().info(f"MPPI time_steps → {steps}")
         )
+
+    def _set_amcl_params(self, params: dict) -> None:
+        if not self._amcl_params_client.service_is_ready():
+            self.get_logger().warn("AMCL set_parameters service not ready")
+            return
+        param_list = []
+        for name, value in params.items():
+            p = Parameter()
+            p.name = name
+            if isinstance(value, int):
+                p.value = ParameterValue(
+                    type=ParameterType.PARAMETER_INTEGER, integer_value=value
+                )
+            else:
+                p.value = ParameterValue(
+                    type=ParameterType.PARAMETER_DOUBLE, double_value=float(value)
+                )
+            param_list.append(p)
+        req = SetParameters.Request(parameters=param_list)
+        future = self._amcl_params_client.call_async(req)
+        future.add_done_callback(
+            lambda f: self.get_logger().info(f"AMCL params updated: {list(params.keys())}")
+        )
+
+    def _set_amcl_direct_approach_params(self) -> None:
+        self._set_amcl_params({
+            "laser_max_range": 3.0,
+            "laser_likelihood_max_dist": 1.0,
+            "z_hit": 0.95,
+            "z_rand": 0.02,
+            "z_short": 0.02,
+            "z_max": 0.01,
+            "sigma_hit": 0.08,
+            "max_beams": 120,
+            "update_min_d": 0.01,
+            "update_min_a": 0.02,
+        })
+
+    def _restore_amcl_default_params(self) -> None:
+        self._set_amcl_params({
+            "laser_max_range": 100.0,
+            "laser_likelihood_max_dist": 2.0,
+            "z_hit": 0.85,
+            "z_rand": 0.05,
+            "z_short": 0.05,
+            "z_max": 0.05,
+            "sigma_hit": 0.15,
+            "max_beams": 60,
+            "update_min_d": 0.05,
+            "update_min_a": 0.10,
+        })
+
+    def _publish_initialpose_once(self) -> None:
+        try:
+            tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        except Exception:
+            return
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.pose.position.x = tf.transform.translation.x
+        msg.pose.pose.position.y = tf.transform.translation.y
+        msg.pose.pose.orientation.z = tf.transform.rotation.z
+        msg.pose.pose.orientation.w = tf.transform.rotation.w
+        msg.pose.covariance[0] = 0.05
+        msg.pose.covariance[7] = 0.05
+        msg.pose.covariance[35] = 0.02
+        self._pub_initial_pose.publish(msg)
+        self.get_logger().info("Published initialpose for direct approach re-localization")
 
     def _publish_wheel_rpms(
         self, fl: float, fr: float, rl: float, rr: float

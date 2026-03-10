@@ -129,6 +129,13 @@ class RobotController(Node):
     def on_hand_feedback(self, msg: HandMessage) -> None:
         self.hand_fb_buffer = msg
 
+        # GRIP_FAIL を受け取ったら target を CLOSE に変更し、hwmc が CLOSE_DONE に遷移できるようにする
+        # （GRIP_FAIL 中に target=OPEN を送り続けるとループするため）
+        if msg.ring_1.state == RingMechanism.STATE_GRIP_FAIL:
+            self.hands_cntl.ring_1_state = RingMechanism.STATE_CLOSE
+        if msg.ring_2.state == RingMechanism.STATE_GRIP_FAIL:
+            self.hands_cntl.ring_2_state = RingMechanism.STATE_CLOSE
+
     def on_controller_command(self, msg: String) -> None:
         try:
             command: dict = json.loads(msg.data)
