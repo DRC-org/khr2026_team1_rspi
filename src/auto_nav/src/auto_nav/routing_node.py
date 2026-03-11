@@ -739,6 +739,22 @@ class RoutingNode(Node):
                         )
                         return
 
+            elif action_type == "early_depart":
+                delay = float(act.get("delay", 0.0))
+                if delay > 0:
+                    elapsed = 0.0
+                    interval = 0.05
+                    while elapsed < delay:
+                        if self._sequence_abort.is_set():
+                            return
+                        time.sleep(interval)
+                        elapsed += interval
+                self.get_logger().info(
+                    f"early_depart: departing (delay={delay}s)"
+                )
+                done_callback()
+                done_callback = lambda: None
+
             elif action_type == "ring_align":
                 color = act.get("color", "any")
                 timeout = float(act.get("timeout", 5.0))
