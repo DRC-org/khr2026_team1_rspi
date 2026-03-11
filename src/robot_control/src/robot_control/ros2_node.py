@@ -53,6 +53,11 @@ _RING_STATE = {
     RingMechanism.STATE_CLOSE_DONE: "close_done",
 }
 
+_LED_STATE = {
+    True: "on",
+    False: "off",
+}
+
 
 class RobotController(Node):
     def __init__(self):
@@ -190,6 +195,9 @@ class RobotController(Node):
                         enum_dict = _RING_POS
                     elif control_type == "state":
                         enum_dict = _RING_STATE
+                elif target in ("vgoal_led", "error_led"):
+                    if control_type == "state":
+                        enum_dict = _LED_STATE
 
                 keys = [k for k, v in enum_dict.items() if v == action]
 
@@ -444,5 +452,7 @@ class RobotController(Node):
         hand_msg.ring_1.state = self.hands_cntl.ring_1_state
         hand_msg.ring_2.pos = self.hands_cntl.ring_2_pos
         hand_msg.ring_2.state = self.hands_cntl.ring_2_state
+        hand_msg.crab.vgoal_led = self.hands_cntl.vgoal_led_state
+        hand_msg.crab.error_led = self.hands_cntl.error_led_state
 
         self.pub_hand_control.publish(hand_msg)

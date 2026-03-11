@@ -17,7 +17,10 @@ class HandsController:
         self.ring_2_pos = RingMechanism.POS_STOPPED
         self.ring_2_state = RingMechanism.STATE_STOPPED
 
-    def set_target(self, target: str, control_type: str, action: int) -> None:
+        self.vgoal_led_state = False
+        self.error_led_state = False
+
+    def set_target(self, target: str, control_type: str, action) -> None:
         if target == "yagura_1":
             if control_type == "pos":
                 self.yagura_1_pos = action
@@ -38,3 +41,9 @@ class HandsController:
                 self.ring_2_pos = action
             elif control_type == "state":
                 self.ring_2_state = action
+        elif target == "vgoal_led":
+            if control_type == "state":
+                self.vgoal_led_state = action
+        elif target == "error_led":
+            if control_type == "state":
+                self.error_led_state = action
