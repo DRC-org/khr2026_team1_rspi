@@ -47,7 +47,7 @@ class RingAlignmentNode(Node):
         super().__init__("ring_alignment_node")
 
         self.declare_parameter("camera_device", 0)
-        self.declare_parameter("ring_diameter", 0.08)
+        self.declare_parameter("ring_diameter", 0.20)
         self.declare_parameter("align_tolerance", 0.005)
         self.declare_parameter("kp", 0.5)
         self.declare_parameter("max_speed", 0.05)
