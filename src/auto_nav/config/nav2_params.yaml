@@ -58,20 +58,20 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 5
+      time_steps: 12
       model_dt: 0.2
       batch_size: 1200
       vx_std: 0.3
       vy_std: 0.15
       wz_std: 0.12
-      vx_max: 2.5
-      vx_min: -2.5
-      vy_max: 1.5
-      vy_min: -1.5
+      vx_max: 3.2
+      vx_min: -3.2
+      vy_max: 3.2
+      vy_min: -3.2
       wz_max: 3.5
-      ax_max: 1.25
-      ax_min: -1.25
-      ay_max: 0.75
+      ax_max: 3.0
+      ax_min: -3.0
+      ay_max: 2.0
       az_max: 1.75
       motion_model: "Omni"
       iteration_count: 3
@@ -206,7 +206,7 @@ global_costmap:
       robot_base_frame: base_link
       use_sim_time: false
       # フットプリント実寸: 中心→前後 0.25m、中心→左右 0.29m
-      footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
+      footprint: "[[0.25, 0.315], [-0.25, 0.315], [-0.25, -0.315], [0.25, -0.315]]"
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "inflation_layer"]
@@ -216,7 +216,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 1.5
-        inflation_radius: 0.42
+        inflation_radius: 0.5
       always_send_full_costmap: true
 
 # =============================================================================
@@ -235,7 +235,7 @@ local_costmap:
       height: 3
       resolution: 0.035
       # フットプリント実寸: 中心→前後 0.25m、中心→左右 0.29m
-      footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
+      footprint: "[[0.25, 0.315], [-0.25, 0.315], [-0.25, -0.315], [0.25, -0.315]]"
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -259,5 +259,5 @@ local_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         # LiDAR ノイズ由来の孤立障害物セルの影響範囲を縮小
         cost_scaling_factor: 5.0
-        inflation_radius: 0.42
+        inflation_radius: 0.5
       always_send_full_costmap: true
