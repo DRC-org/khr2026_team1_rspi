@@ -15,7 +15,12 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "ruff>=0.14.10",
+    "pytest>=8.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:launch_testing -p no:launch_ros -p no:ament_copyright -p no:ament_flake8 -p no:ament_pep257 -p no:ament_xmllint -p no:ament_lint"
 
 [tool.ruff]
 line-length = 88

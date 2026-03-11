@@ -8,7 +8,7 @@ ring_colors:
       - {h_min: 100, h_max: 130, s_min: 80, s_max: 255, v_min: 60, v_max: 255}
   yellow:
     ranges:
-      - {h_min: 18, h_max: 35, s_min: 140, s_max: 255, v_min: 140, v_max: 255}
+      - {h_min: 18, h_max: 35, s_min: 180, s_max: 255, v_min: 180, v_max: 255}
   green:
     ranges:
       - {h_min: 40, h_max: 80, s_min: 100, s_max: 255, v_min: 80, v_max: 255}
@@ -16,6 +16,5 @@ ring_colors:
     ranges:
       - {h_min: 0, h_max: 10, s_min: 100, s_max: 255, v_min: 80, v_max: 255}
       - {h_min: 170, h_max: 180, s_min: 100, s_max: 255, v_min: 80, v_max: 255}
-      - {h_min: 100, h_max: 130, s_min: 80, s_max: 255, v_min: 60, v_max: 255}
-      - {h_min: 18, h_max: 35, s_min: 140, s_max: 255, v_min: 140, v_max: 255}
+      - {h_min: 18, h_max: 35, s_min: 180, s_max: 255, v_min: 180, v_max: 255}
       - {h_min: 40, h_max: 80, s_min: 100, s_max: 255, v_min: 80, v_max: 255}

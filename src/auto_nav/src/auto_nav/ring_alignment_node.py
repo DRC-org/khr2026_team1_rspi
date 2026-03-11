@@ -138,7 +138,7 @@ class RingAlignmentNode(Node):
     def _detect_ring(self, frame: np.ndarray, color_ranges: list) -> tuple:
         """リングを検出し、(center_x, center_y, radius) を返す。未検出時は None。
 
-        リング（中空円）は輪郭ベースの真円度が低いため、
+        遮蔽物でリングが断片化するため、dilate で断片を統合してから
         convex hull の真円度とアスペクト比で評価する。
         """
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -147,11 +147,15 @@ class RingAlignmentNode(Node):
         for lower, upper in color_ranges:
             mask |= cv2.inRange(hsv, lower, upper)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        k_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k_small)
 
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        k_merge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (20, 20))
+        mask_merged = cv2.dilate(mask, k_merge)
+        mask_merged = cv2.morphologyEx(mask_merged, cv2.MORPH_CLOSE, k_merge)
+        mask_merged = cv2.erode(mask_merged, k_merge)
+
+        contours, _ = cv2.findContours(mask_merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         best = None
         best_hull_area = 0
@@ -172,7 +176,7 @@ class RingAlignmentNode(Node):
 
             x, y, w, h = cv2.boundingRect(hull)
             aspect = min(w, h) / max(w, h) if max(w, h) > 0 else 0
-            if aspect < 0.6:
+            if aspect < 0.5:
                 continue
 
             if hull_area > best_hull_area:

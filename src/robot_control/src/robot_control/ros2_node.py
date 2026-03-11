@@ -11,7 +11,7 @@ from robot_msgs.msg import (
     WheelMessage,
     YaguraMechanism,
 )
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from .constants import MAX_SPEED_MPS
 from .hands import HandsController
@@ -63,6 +63,7 @@ class RobotController(Node):
         )
         self.pub_hand_control = self.create_publisher(HandMessage, "hand_control", 10)
         self.pub_bt_feedback = self.create_publisher(String, "bluetooth_tx", 10)
+        self.pub_health_check = self.create_publisher(Bool, "health_check", 10)
         self.sub_wheel_feedback = self.create_subscription(
             WheelMessage, "wheel_feedback", self.on_wheel_feedback, 10
         )
@@ -87,6 +88,18 @@ class RobotController(Node):
         self.wheel_fb_buffer: WheelMessage | None = None
         self.hand_fb_buffer: HandMessage | None = None
         self._hand_fb_warned = False  # ハンド未接続の WARN は初回のみ出す
+
+        # フィードバック受信タイムスタンプ（ヘルスチェック用）
+        self._last_wheel_fb_time: float = 0.0
+        self._last_hand_fb_time: float = 0.0
+
+        # ヘルスチェック状態
+        self._hc_running: bool = False
+        self._hc_start_time: float = 0.0
+        self._hc_result: str | None = None
+        self._hc_result_time: float = 0.0
+        self._HC_TIMEOUT = 10.0
+        self._HC_RESULT_DISPLAY_DURATION = 5.0
 
         # 直近の指令 RPM（PID 解析用 target_rpms として送信）
         self._last_commanded_rpms: list[float] = [0.0, 0.0, 0.0, 0.0]
@@ -125,9 +138,14 @@ class RobotController(Node):
 
     def on_wheel_feedback(self, msg: WheelMessage) -> None:
         self.wheel_fb_buffer = msg
+        self._last_wheel_fb_time = time.monotonic()
+
+        if self._hc_running:
+            self._evaluate_hc_wheel_feedback(msg)
 
     def on_hand_feedback(self, msg: HandMessage) -> None:
         self.hand_fb_buffer = msg
+        self._last_hand_fb_time = time.monotonic()
 
         # GRIP_FAIL を受け取ったら target を CLOSE に変更し、hwmc が CLOSE_DONE に遷移できるようにする
         # （GRIP_FAIL 中に target=OPEN を送り続けるとループするため）
@@ -193,9 +211,55 @@ class RobotController(Node):
                 if "target_motor" in command:
                     self._target_motor = command.get("target_motor", "fl")
 
+            elif command["type"] == "health_check":
+                msg_hc = Bool()
+                msg_hc.data = True
+                self.pub_health_check.publish(msg_hc)
+                self._hc_start_time = time.monotonic()
+                self._hc_running = True
+                self._hc_result = None
+                self._hc_wheel_ok = False
+                self.get_logger().info("Health check triggered")
 
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse JSON: {e}")
+
+    def _evaluate_hc_wheel_feedback(self, msg: WheelMessage) -> None:
+        """ヘルスチェック中の wheel_feedback から RPM 追従を判定する"""
+        elapsed = time.monotonic() - self._hc_start_time
+        rpms = msg.m3508_rpms
+        _MIN_RPM = 200.0
+
+        if elapsed < 0.5:
+            # Phase 1: 全輪 400 RPM 前進 → FL/RL > 0, FR/RR < 0
+            if (abs(rpms.fl) > _MIN_RPM or abs(rpms.fr) > _MIN_RPM
+                    or abs(rpms.rl) > _MIN_RPM or abs(rpms.rr) > _MIN_RPM):
+                self._hc_wheel_ok = True
+        elif elapsed < 1.0:
+            # Phase 2: 全輪 400 RPM 後退
+            if (abs(rpms.fl) > _MIN_RPM or abs(rpms.fr) > _MIN_RPM
+                    or abs(rpms.rl) > _MIN_RPM or abs(rpms.rr) > _MIN_RPM):
+                self._hc_wheel_ok = True
+
+    def _update_hc_state(self) -> None:
+        """ヘルスチェックのタイムアウト判定と結果確定"""
+        now = time.monotonic()
+        if self._hc_running:
+            elapsed = now - self._hc_start_time
+            if elapsed >= self._HC_TIMEOUT:
+                self._hc_running = False
+                self._hc_result = "timeout"
+                self._hc_result_time = now
+                self.get_logger().warn("Health check timed out")
+            elif elapsed >= 1.5 and self._hc_wheel_ok:
+                self._hc_running = False
+                self._hc_result = "ok"
+                self._hc_result_time = now
+                self.get_logger().info("Health check completed: OK")
+
+        if (self._hc_result is not None
+                and now - self._hc_result_time > self._HC_RESULT_DISPLAY_DURATION):
+            self._hc_result = None
 
     def send_controller_feedback(self) -> None:
         """
@@ -208,6 +272,8 @@ class RobotController(Node):
 
         クライアント側 (usePIDCharts.ts) は p_terms キーの有無でメッセージ種別を判断する。
         """
+        self._update_hc_state()
+
         if self.wheel_fb_buffer is None:
             self.get_logger().warn("Wheel feedback buffer is None")
             return
@@ -283,6 +349,18 @@ class RobotController(Node):
                 "2_pos": _RING_POS.get(hand_fb.ring_2.pos, "stopped"),
                 "2_state": _RING_STATE.get(hand_fb.ring_2.state, "stopped"),
             }
+
+        now = time.monotonic()
+        health: dict = {
+            "cwmc": (now - self._last_wheel_fb_time < 1.5) if self._last_wheel_fb_time else False,
+            "hwmc": (now - self._last_hand_fb_time < 1.5) if self._last_hand_fb_time else False,
+        }
+        if self._hc_running:
+            health["hc_running"] = True
+            health["hc_elapsed"] = round(now - self._hc_start_time, 1)
+        if self._hc_result is not None:
+            health["hc_result"] = self._hc_result
+        data["health"] = health
 
         msg = String()
         msg.data = json.dumps(data, separators=(',', ':'))
