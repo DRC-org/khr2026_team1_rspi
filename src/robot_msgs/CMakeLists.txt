@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/YaguraMechanism.msg"
   "msg/IMUValues.msg"
   "msg/RingMechanism.msg"
+  "msg/CrabMechanism.msg"
   "msg/WheelMessage.msg"
   "msg/HandMessage.msg"
 )
