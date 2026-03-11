@@ -368,6 +368,7 @@ class RobotController(Node):
             health["servo_rear"] = hand_fb.servo_rear_alive
             health["dc_lift_front"] = hand_fb.dc_lift_front_alive
             health["dc_lift_rear"] = hand_fb.dc_lift_rear_alive
+            health["crab"] = hand_fb.crab.crab_alive
         if self._hc_running:
             health["hc_running"] = True
             health["hc_elapsed"] = round(now - self._hc_start_time, 1)
