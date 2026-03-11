@@ -716,6 +716,10 @@ class RoutingNode(Node):
                                     f"wait_actuator: {target} retry close_done timeout"
                                 )
                                 return
+                            self.get_logger().info(
+                                f"wait_actuator: {target} grip_fail → trying camera ring_align"
+                            )
+                            self._run_ring_align({"color": "any", "timeout": 5.0})
                             cmd = {
                                 "type": "hand_control",
                                 "target": target,
@@ -755,48 +759,138 @@ class RoutingNode(Node):
                 done_callback()
                 done_callback = lambda: None
 
+            elif action_type == "coord_align":
+                self._run_coord_align(act)
+
             elif action_type == "ring_align":
-                color = act.get("color", "any")
-                timeout = float(act.get("timeout", 5.0))
-
-                with self._ring_align_lock:
-                    self._ring_align_result = None
-
-                cmd = json.dumps({"action": "start", "color": color, "timeout": timeout})
-                self._pub_ring_align.publish(String(data=cmd))
-                self.get_logger().info(f"ring_align: start (color={color}, timeout={timeout}s)")
-
-                deadline = time.monotonic() + timeout + 2.0
-                interval = 0.05
-                while time.monotonic() < deadline:
-                    if self._sequence_abort.is_set():
-                        self._pub_ring_align.publish(
-                            String(data=json.dumps({"action": "cancel"}))
-                        )
-                        return
-                    with self._ring_align_lock:
-                        result = self._ring_align_result
-                    if result is not None:
-                        if result.get("success"):
-                            self.get_logger().info(
-                                f"ring_align success: offset=("
-                                f"{result.get('offset_x', 0):.3f}, "
-                                f"{result.get('offset_y', 0):.3f})m"
-                            )
-                            break
-                        else:
-                            self.get_logger().warn(
-                                f"ring_align failed: {result.get('message', 'unknown')}"
-                            )
-                            break
-                    time.sleep(interval)
-                else:
-                    self._pub_ring_align.publish(
-                        String(data=json.dumps({"action": "cancel"}))
-                    )
-                    self.get_logger().warn("ring_align: routing timeout")
+                self._run_ring_align(act)
 
         done_callback()
+
+    def _run_coord_align(self, act: dict) -> None:
+        """odom座標ベースでウェイポイント位置にP制御で微調整する。"""
+        tolerance = float(act.get("tolerance", 0.01))
+        timeout = float(act.get("timeout", 3.0))
+        kp = float(act.get("kp", 1.0))
+        max_speed = float(act.get("max_speed", 0.08))
+        settle_target = int(act.get("settle_frames", 3))
+
+        goal_name = self._current_goal_name
+        if goal_name is None or goal_name not in self._waypoints:
+            self.get_logger().warn("coord_align: no current waypoint, skipping")
+            return
+
+        wp = self._waypoints[goal_name]
+        target_x = wp["x"]
+        target_y = wp["y"]
+
+        if self._current_court == "red":
+            target_x = -target_x
+
+        self.get_logger().info(
+            f"coord_align: target=({target_x:.3f}, {target_y:.3f}), "
+            f"tolerance={tolerance}m, timeout={timeout}s"
+        )
+
+        settle_count = 0
+        interval = 0.05
+        deadline = time.monotonic() + timeout
+        pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
+
+        try:
+            while time.monotonic() < deadline:
+                if self._sequence_abort.is_set():
+                    return
+
+                try:
+                    tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+                    cur_x = tf.transform.translation.x
+                    cur_y = tf.transform.translation.y
+                except Exception:
+                    time.sleep(interval)
+                    continue
+
+                dx = target_x - cur_x
+                dy = target_y - cur_y
+                dist = math.hypot(dx, dy)
+
+                if dist < tolerance:
+                    settle_count += 1
+                    pub_cmd_vel.publish(Twist())
+                    if settle_count >= settle_target:
+                        self.get_logger().info(
+                            f"coord_align: aligned (err={dist:.4f}m)"
+                        )
+                        return
+                else:
+                    settle_count = 0
+                    vx = max(-max_speed, min(max_speed, kp * dx))
+                    vy = max(-max_speed, min(max_speed, kp * dy))
+
+                    # map座標の速度をbase_link座標に変換
+                    q = tf.transform.rotation
+                    yaw = math.atan2(
+                        2.0 * (q.w * q.z + q.x * q.y),
+                        1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+                    )
+                    cos_y = math.cos(-yaw)
+                    sin_y = math.sin(-yaw)
+                    vx_body = vx * cos_y - vy * sin_y
+                    vy_body = vx * sin_y + vy * cos_y
+
+                    twist = Twist()
+                    twist.linear.x = vx_body
+                    twist.linear.y = vy_body
+                    pub_cmd_vel.publish(twist)
+
+                time.sleep(interval)
+
+            self.get_logger().warn(
+                f"coord_align: timeout (err={dist:.4f}m)"
+            )
+        finally:
+            pub_cmd_vel.publish(Twist())
+
+    def _run_ring_align(self, act: dict) -> None:
+        """カメラベースのリングアライメントを実行する。"""
+        color = act.get("color", "any")
+        timeout = float(act.get("timeout", 5.0))
+
+        with self._ring_align_lock:
+            self._ring_align_result = None
+
+        cmd = json.dumps({"action": "start", "color": color, "timeout": timeout})
+        self._pub_ring_align.publish(String(data=cmd))
+        self.get_logger().info(f"ring_align: start (color={color}, timeout={timeout}s)")
+
+        deadline = time.monotonic() + timeout + 2.0
+        interval = 0.05
+        while time.monotonic() < deadline:
+            if self._sequence_abort.is_set():
+                self._pub_ring_align.publish(
+                    String(data=json.dumps({"action": "cancel"}))
+                )
+                return
+            with self._ring_align_lock:
+                result = self._ring_align_result
+            if result is not None:
+                if result.get("success"):
+                    self.get_logger().info(
+                        f"ring_align success: offset=("
+                        f"{result.get('offset_x', 0):.3f}, "
+                        f"{result.get('offset_y', 0):.3f})m"
+                    )
+                else:
+                    self.get_logger().warn(
+                        f"ring_align failed: {result.get('message', 'unknown')}"
+                    )
+                return
+            time.sleep(interval)
+
+        self._pub_ring_align.publish(
+            String(data=json.dumps({"action": "cancel"}))
+        )
+        self.get_logger().warn("ring_align: routing timeout")
 
     def _get_value_map(self, target: str, control_type: str) -> dict | None:
         if target.startswith("yagura_"):
