@@ -52,8 +52,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | リポジトリ | 説明 |
 |-----------|------|
 | `khr2026_team1_rspi`（本リポジトリ） | Raspberry Pi 側の中央制御プログラム（ROS2） |
-| `khr2026_team1_cwmc` | 足回りモータコントローラ（ESP32）。本リポジトリからのコマンドを受け取り M3508 を駆動 |
-| `khr2026_team1_hwmc` | ロボットハンド等モータコントローラ（ESP32）。本リポジトリからのコマンドを受け取り手先モータを駆動 |
+| `khr2026_team1_cwmc` | 足回りモータコントローラ（ESP32, CAN 2）。M3508 x4 を駆動 |
+| `khr2026_team1_hwmc` | 機構系 CAN ブリッジ（ESP32, CAN 1）。HandMessage を受け取りサブボードへ CAN 転送 |
+| `khr2026_team1_yagura_dcmd` | 櫓昇降 DC モータドライバ（Arduino UNO R4, CAN 0x300） |
+| `khr2026_team1_ring_svmd` | リングハンド サーボドライバ（Arduino Nano, CAN 0x401） |
+| `khr2026_team1_crub_igniter` | MOSFET 制御基板（Arduino UNO R4, CAN 0x302） |
 
 ---
 
@@ -236,6 +239,7 @@ map
 | `robot_control` | Bluetooth 入力 → ESP32 制御（M3508 逆運動学含む） |
 | `bt_communication` | Bluetooth GATT サーバー（bumble 依存、`.venv` で管理） |
 | `auto_nav` | 自律走行（odometry_node, cmd_vel_bridge_node、以降追加予定） |
+| `web_control` | Web ベース制御 |
 | `ydlidar_ros2_driver` | YDLiDAR ドライバ（/scan 配信） |
 | `micro_ros_agent` | ESP32 ↔ ROS2 ブリッジ |
 | `slam_toolbox` | SLAM（サブモジュール、フェーズ3で使用予定） |
