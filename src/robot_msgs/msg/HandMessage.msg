@@ -4,3 +4,5 @@ RingMechanism ring_1
 RingMechanism ring_2
 bool servo_front_alive
 bool servo_rear_alive
+bool dc_lift_front_alive
+bool dc_lift_rear_alive
