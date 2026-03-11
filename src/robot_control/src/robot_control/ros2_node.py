@@ -355,6 +355,9 @@ class RobotController(Node):
             "cwmc": (now - self._last_wheel_fb_time < 1.5) if self._last_wheel_fb_time else False,
             "hwmc": (now - self._last_hand_fb_time < 1.5) if self._last_hand_fb_time else False,
         }
+        if hand_fb is not None:
+            health["servo_front"] = hand_fb.servo_front_alive
+            health["servo_rear"] = hand_fb.servo_rear_alive
         if self._hc_running:
             health["hc_running"] = True
             health["hc_elapsed"] = round(now - self._hc_start_time, 1)
