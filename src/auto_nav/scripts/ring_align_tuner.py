@@ -10,13 +10,18 @@ ring_align_tuner — HSV閾値リアルタイム調整ツール
   python3 ring_align_tuner.py 0
 """
 
+import os
 import sys
+from datetime import datetime
 
 import cv2
 import numpy as np
 
+SAVE_DIR = "/home/taiga/DRC/temp"
+
 
 def main():
+    os.makedirs(SAVE_DIR, exist_ok=True)
     device = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     cap = cv2.VideoCapture(device)
     if not cap.isOpened():
@@ -31,7 +36,7 @@ def main():
     cv2.createTrackbar("V min", "tuner", 80, 255, lambda _: None)
     cv2.createTrackbar("V max", "tuner", 255, 255, lambda _: None)
 
-    print("q: quit, s: print current values")
+    print("q: quit, s: print current values, c: save screenshot")
 
     while True:
         ret, frame = cap.read()
@@ -65,6 +70,11 @@ def main():
             print(f"{{h_min: {h_min}, h_max: {h_max}, "
                   f"s_min: {s_min}, s_max: {s_max}, "
                   f"v_min: {v_min}, v_max: {v_max}}}")
+        elif key == ord("c"):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(SAVE_DIR, f"ring_{ts}.png")
+            cv2.imwrite(path, combined)
+            print(f"saved: {path}")
 
     cap.release()
     cv2.destroyAllWindows()

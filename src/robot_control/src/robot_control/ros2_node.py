@@ -43,6 +43,8 @@ _RING_POS = {
     RingMechanism.POS_PICKUP_DONE: "pickup_done",
     RingMechanism.POS_YAGURA_DONE: "yagura_done",
     RingMechanism.POS_HONMARU_DONE: "honmaru_done",
+    RingMechanism.POS_INIT: "init",
+    RingMechanism.POS_INIT_DONE: "init_done",
 }
 
 _RING_STATE = {
@@ -218,6 +220,16 @@ class RobotController(Node):
                 self._enable_pid_telemetry = command.get("enable_pid", False)
                 if "target_motor" in command:
                     self._target_motor = command.get("target_motor", "fl")
+
+            elif command["type"] == "hand_reset":
+                self.hands_cntl.ring_1_pos = RingMechanism.POS_INIT
+                self.hands_cntl.ring_2_pos = RingMechanism.POS_INIT
+                self.hands_cntl.ring_1_state = RingMechanism.STATE_CLOSE
+                self.hands_cntl.ring_2_state = RingMechanism.STATE_CLOSE
+                self.hands_cntl.yagura_1_pos = YaguraMechanism.POS_DOWN
+                self.hands_cntl.yagura_2_pos = YaguraMechanism.POS_DOWN
+                self.hands_cntl.yagura_1_state = YaguraMechanism.STATE_OPEN
+                self.hands_cntl.yagura_2_state = YaguraMechanism.STATE_OPEN
 
             elif command["type"] == "health_check":
                 msg_hc = Bool()

@@ -30,6 +30,7 @@ MPPI_TIME_STEPS = 8
 DIRECT_APPROACH_DIST = 0.3      # 0.3m 以内で直接アプローチに切り替え
 GOAL_REACHED_DIST = 0.02        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
+DIRECT_APPROACH_TIMEOUT = 5.0   # 直接アプローチのタイムアウト [s]
 
 # 運動学定数（cmd_vel_bridge_node.py と同じ値）
 WHEEL_RADIUS = 0.04925
@@ -143,6 +144,7 @@ class RoutingNode(Node):
 
         self._pub_wheel = self.create_publisher(WheelMessage, "wheel_control", 10)
         self._approach_goal_xy: tuple[float, float] | None = None
+        self._approach_start_time: float = 0.0
         self._approach_goal_theta: float = 0.0
         self._latest_scan: LaserScan | None = None
         self._scan_lock = threading.Lock()
@@ -270,6 +272,8 @@ class RoutingNode(Node):
                 self._approach_goal_xy = None
             self._sequence_abort.set()
             self._auto_seq_running = False
+            self._set_led("error_led", False)
+            self._set_led("vgoal_led", False)
         self._state = "MANUAL" if mode == "manual" else "AUTO_IDLE"
         self._pub_mode.publish(String(data=mode))
         self._pub_tx.publish(String(data=json.dumps({"nav_status": "mode", "mode": mode})))
@@ -716,10 +720,6 @@ class RoutingNode(Node):
                                     f"wait_actuator: {target} retry close_done timeout"
                                 )
                                 return
-                            self.get_logger().info(
-                                f"wait_actuator: {target} grip_fail → trying camera ring_align"
-                            )
-                            self._run_ring_align({"color": "any", "timeout": 5.0})
                             cmd = {
                                 "type": "hand_control",
                                 "target": target,
@@ -903,10 +903,19 @@ class RoutingNode(Node):
         mech = getattr(fb, target)
         return getattr(mech, control_type)
 
+    def _set_led(self, target: str, on: bool) -> None:
+        self._pub_rx.publish(String(data=json.dumps({
+            "type": "hand_control",
+            "target": target,
+            "control_type": "state",
+            "action": "on" if on else "off",
+        })))
+
     def _abort_sequence_with_error(self, message: str) -> None:
         self.get_logger().error(message)
         self._auto_seq_running = False
         self._state = "AUTO_IDLE"
+        self._set_led("error_led", True)
         self._pub_tx.publish(String(data=json.dumps({
             "nav_status": "error",
             "waypoint": self._current_goal_name,
@@ -940,6 +949,7 @@ class RoutingNode(Node):
             else:
                 self._auto_seq_running = False
                 self._state = "AUTO_IDLE"
+                self._set_led("vgoal_led", True)
                 self._pub_tx.publish(String(data=json.dumps({
                     "nav_status": "completed",
                 })))
@@ -1018,6 +1028,9 @@ class RoutingNode(Node):
                 "message": f"invalid from_index: {from_index}",
             })))
             return
+
+        self._set_led("error_led", False)
+        self._set_led("vgoal_led", False)
 
         self._auto_seq_running = True
         self._auto_seq_index = from_index
@@ -1137,6 +1150,8 @@ class RoutingNode(Node):
         self._sequence_abort.set()
         self._auto_seq_running = False
         self._state = "AUTO_IDLE"
+        self._set_led("error_led", False)
+        self._set_led("vgoal_led", False)
 
     def _advance_auto_sequence(self) -> None:
         name = self._auto_seq_names[self._auto_seq_index]
@@ -1256,6 +1271,7 @@ class RoutingNode(Node):
                     f"Direct approach activated (dist={dist:.3f}m)"
                 )
                 self._state = "DIRECT_APPROACH"
+                self._approach_start_time = time.monotonic()
                 self._set_mppi_critics(MPPI_DEFAULT)
                 if self._goal_handle:
                     self._goal_handle.cancel_goal_async()
@@ -1317,15 +1333,21 @@ class RoutingNode(Node):
 
         amcl_reached = dist <= goal_dist_tol and abs(yaw_error) <= goal_yaw_tol
         lidar_reached = lidar_dist is not None and lidar_dist <= LIDAR_STOP_DIST
+        elapsed = time.monotonic() - self._approach_start_time
+        timeout_reached = elapsed >= DIRECT_APPROACH_TIMEOUT
 
-        if amcl_reached or lidar_reached:
+        if amcl_reached or lidar_reached or timeout_reached:
             if amcl_reached:
                 self.get_logger().info(
                     f"Goal reached (direct approach, dist={dist:.3f}m, yaw_err={yaw_error:.3f})"
                 )
-            else:
+            elif lidar_reached:
                 self.get_logger().info(
                     f"Goal reached by LiDAR (forward_dist={lidar_dist:.3f}m)"
+                )
+            else:
+                self.get_logger().warn(
+                    f"Goal reached by timeout ({elapsed:.1f}s elapsed, dist={dist:.3f}m)"
                 )
             self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
             self._approach_goal_xy = None
