@@ -315,6 +315,7 @@ def generate_launch_description():
         name="ring_alignment_node",
         output="screen",
         emulate_tty=True,
+        parameters=[{"camera_device": 2}],
         ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 

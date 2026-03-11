@@ -39,7 +39,7 @@ _LOOP_HZ = 20.0
 _CAMERA_WARMUP_FRAMES = 5
 _MAX_MISS_FRAMES = 20
 _MIN_CONTOUR_AREA = 500
-_MIN_CIRCULARITY = 0.6
+_MIN_CIRCULARITY = 0.5
 
 
 class RingAlignmentNode(Node):
@@ -136,7 +136,11 @@ class RingAlignmentNode(Node):
         self._pub_cmd_vel.publish(Twist())
 
     def _detect_ring(self, frame: np.ndarray, color_ranges: list) -> tuple:
-        """リングを検出し、(center_x, center_y, radius) を返す。未検出時は None。"""
+        """リングを検出し、(center_x, center_y, radius) を返す。未検出時は None。
+
+        リング（中空円）は輪郭ベースの真円度が低いため、
+        convex hull の真円度とアスペクト比で評価する。
+        """
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
@@ -150,28 +154,30 @@ class RingAlignmentNode(Node):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         best = None
-        best_area = 0
+        best_hull_area = 0
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if area < _MIN_CONTOUR_AREA:
                 continue
 
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0:
+            hull = cv2.convexHull(cnt)
+            hull_area = cv2.contourArea(hull)
+            hull_peri = cv2.arcLength(hull, True)
+            if hull_peri == 0:
                 continue
-            circularity = 4.0 * math.pi * area / (perimeter * perimeter)
-            if circularity < _MIN_CIRCULARITY:
+            hull_circ = 4.0 * math.pi * hull_area / (hull_peri * hull_peri)
+            if hull_circ < _MIN_CIRCULARITY:
                 continue
 
-            x, y, w, h = cv2.boundingRect(cnt)
+            x, y, w, h = cv2.boundingRect(hull)
             aspect = min(w, h) / max(w, h) if max(w, h) > 0 else 0
             if aspect < 0.6:
                 continue
 
-            if area > best_area:
-                best_area = area
-                (cx, cy), radius = cv2.minEnclosingCircle(cnt)
+            if hull_area > best_hull_area:
+                best_hull_area = hull_area
+                (cx, cy), radius = cv2.minEnclosingCircle(hull)
                 best = (cx, cy, radius, cnt)
 
         if best is None:
