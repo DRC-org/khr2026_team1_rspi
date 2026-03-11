@@ -94,6 +94,12 @@ def generate_launch_description():
         description="micro-ROS agent の接続方式: 'serial'（USB, /dev/esp32_c + /dev/esp32_h）または 'udp4'（Wi-Fi, cwmc:8888 / hwmc:8889）",
     )
 
+    hci_transport_arg = DeclareLaunchArgument(
+        "hci_transport",
+        default_value="usb:2357:0604",
+        description="bumble の HCI トランスポート URI（例: 'hci-socket:0', 'usb:0', 'usb:0bda:4853'）",
+    )
+
     _is_serial = IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "serial"']))
     _is_udp = IfCondition(PythonExpression(['"', LaunchConfiguration("transport"), '" == "udp4"']))
 
@@ -318,6 +324,7 @@ def generate_launch_description():
         output="screen",
         emulate_tty=True,
         additional_env={"PYTHONPATH": _BT_PYTHONPATH},
+        parameters=[{"hci_transport": LaunchConfiguration("hci_transport")}],
         ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
     )
 
@@ -336,6 +343,7 @@ def generate_launch_description():
             map_arg,
             debug_arg,
             transport_arg,
+            hci_transport_arg,
             reset_esp32_c,
             reset_esp32_h,
             RegisterEventHandler(

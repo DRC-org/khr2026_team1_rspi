@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **ユーザーへの起動依頼の書き方（例）**:
 ```
 以下のコマンドでノードを起動してください:
-  ros2 launch auto_nav mapping_launch.py
+  ros2 launch auto_nav auto_nav_launch.py
 起動したら教えてください。デバッグを進めます。
 ```
 
@@ -96,11 +96,11 @@ uv venv --system-site-packages
 
 ```bash
 # シリアル接続（デフォルト, USB）
-ros2 launch auto_nav mapping_launch.py
+ros2 launch auto_nav auto_nav_launch.py
 # ESP32 が /dev/ttyUSB1 の場合:
-ros2 launch auto_nav mapping_launch.py serial_port:=/dev/ttyUSB1
+ros2 launch auto_nav auto_nav_launch.py serial_port:=/dev/ttyUSB1
 # Wi-Fi 接続（UDP, port 8888）
-ros2 launch auto_nav mapping_launch.py transport:=udp4
+ros2 launch auto_nav auto_nav_launch.py transport:=udp4
 ```
 
 ### bt_communication 単独実行時
@@ -276,7 +276,7 @@ FR/RR の wheel_feedback RPM は取付向きの符号反転がそのまま返っ
 ## bumble（bt_communication）の注意事項
 
 bumble は `src/bt_communication/.venv` にのみインストール済み。
-`mapping_launch.py` では bt_communication ノードにのみ `PYTHONPATH` を設定して対応している。
+`auto_nav_launch.py` では bt_communication ノードにのみ `PYTHONPATH` を設定して対応している。
 システム全体の `PYTHONPATH` を変更しないこと（他パッケージが壊れる）。
 
 ---

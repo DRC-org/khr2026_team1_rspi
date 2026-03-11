@@ -35,7 +35,7 @@ lifecycle_manager:
 # =============================================================================
 controller_server:
   ros__parameters:
-    controller_frequency: 10.0
+    controller_frequency: 15.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
@@ -60,7 +60,7 @@ controller_server:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 5
       model_dt: 0.2
-      batch_size: 800
+      batch_size: 1200
       vx_std: 0.3
       vy_std: 0.15
       wz_std: 0.12
@@ -69,8 +69,12 @@ controller_server:
       vy_max: 1.5
       vy_min: -1.5
       wz_max: 3.5
+      ax_max: 1.25
+      ax_min: -1.25
+      ay_max: 0.75
+      az_max: 1.75
       motion_model: "Omni"
-      iteration_count: 2
+      iteration_count: 3
       prune_distance: 2.5
       transform_tolerance: 0.2
       temperature: 0.3
@@ -102,7 +106,7 @@ controller_server:
       GoalCritic.enabled: true
       GoalCritic.cost_power: 1
       GoalCritic.cost_weight: 8.0
-      GoalCritic.threshold_to_consider: 1.5
+      GoalCritic.threshold_to_consider: 2.5
       GoalAngleCritic.enabled: true
       GoalAngleCritic.cost_power: 1
       GoalAngleCritic.cost_weight: 2.0
@@ -150,8 +154,8 @@ bt_navigator:
     robot_base_frame: base_link
     odom_topic: /odom
     bt_loop_duration: 10
-    default_server_timeout: 1000
-    wait_for_service_timeout: 1000
+    default_server_timeout: 500
+    wait_for_service_timeout: 500
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
@@ -221,15 +225,15 @@ global_costmap:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 8.0
+      publish_frequency: 3.0
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: false
       rolling_window: true
       width: 3
       height: 3
-      resolution: 0.05
+      resolution: 0.035
       # フットプリント実寸: 中心→前後 0.25m、中心→左右 0.29m
       footprint: "[[0.25, 0.29], [-0.25, 0.29], [-0.25, -0.29], [0.25, -0.29]]"
       plugins: ["obstacle_layer", "inflation_layer"]

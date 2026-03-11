@@ -27,7 +27,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 MPPI_TIME_STEPS = 8
 
 # 直接アプローチ用定数
-DIRECT_APPROACH_DIST = 0.5      # 0.5m 以内で直接アプローチに切り替え
+DIRECT_APPROACH_DIST = 0.3      # 0.3m 以内で直接アプローチに切り替え
 GOAL_REACHED_DIST = 0.02        # ゴール到達判定距離 [m]
 DIRECT_APPROACH_SPEED = 0.15    # 直接アプローチ時の移動速度 [m/s]
 
@@ -58,6 +58,24 @@ WALL_BACK_OFF_DIST = 0.35       # 後退距離 [m]
 BACK_OFF_SPEED = 0.5            # 後退速度 [m/s]
 BACK_OFF_TIMEOUT = 5.0          # 後退タイムアウト [s]
 BACK_OFF_REACHED_DIST = 0.05    # 後退到達判定距離 [m]
+
+# 櫓補正用定数
+YAGURA_CORRECTION_DIST = 3.0       # 補正を試みる残距離 [m]
+YAGURA_CORRECTION_MAX = 0.3        # 補正量の上限 [m]
+
+# ring_pickup_1 用 MPPI プリセット
+MPPI_RING_PICKUP_1 = {
+    "FollowPath.PathFollowCritic.cost_weight": 12.0,
+    "FollowPath.PathAlignCritic.cost_weight": 18.0,
+    "FollowPath.CostCritic.cost_weight": 1.8,
+    "FollowPath.CostCritic.consider_footprint": True,
+}
+MPPI_DEFAULT = {
+    "FollowPath.PathFollowCritic.cost_weight": 5.0,
+    "FollowPath.PathAlignCritic.cost_weight": 10.0,
+    "FollowPath.CostCritic.cost_weight": 2.5,
+    "FollowPath.CostCritic.consider_footprint": False,
+}
 
 _YAGURA_POS_MAP = {"up": 0, "down": 1, "stopped": 2, "up_done": 3, "down_done": 4}
 _YAGURA_STATE_MAP = {"open": 0, "close": 1, "stopped": 2, "open_done": 3, "close_done": 4}
@@ -144,7 +162,7 @@ class RoutingNode(Node):
         self._amcl_params_client = self.create_client(
             SetParameters, "/amcl/set_parameters"
         )
-        self.create_timer(0.2, self._on_approach_timer)
+        self.create_timer(0.05, self._on_approach_timer)
 
         self._hand_fb_list: list[HandMessage] = []
         self._hand_fb_lock = threading.Lock()
@@ -153,10 +171,15 @@ class RoutingNode(Node):
         )
 
         self._yagura_pos: PointStamped | None = None
+        self._yagura_pos_1: PointStamped | None = None
         self._yagura_pos_lock = threading.Lock()
         self._sub_yagura = self.create_subscription(
             PointStamped, "yagura_position_0", self._on_yagura_pos, 10
         )
+        self._sub_yagura_1 = self.create_subscription(
+            PointStamped, "yagura_position_1", self._on_yagura_pos_1, 10
+        )
+        self._yagura_correction_applied: bool = False
 
         self._approach_done_event: threading.Event | None = None
         self._approach_success: bool = False
@@ -165,6 +188,7 @@ class RoutingNode(Node):
         self._sequence_thread: threading.Thread | None = None
         self._auto_seq_running: bool = False
         self._auto_seq_index: int = 0
+        self._auto_seq_started_midway: bool = False
 
     def _on_scan(self, msg: LaserScan) -> None:
         with self._scan_lock:
@@ -179,6 +203,10 @@ class RoutingNode(Node):
     def _on_yagura_pos(self, msg: PointStamped) -> None:
         with self._yagura_pos_lock:
             self._yagura_pos = msg
+
+    def _on_yagura_pos_1(self, msg: PointStamped) -> None:
+        with self._yagura_pos_lock:
+            self._yagura_pos_1 = msg
 
     def _on_odom(self, msg: Odometry) -> None:
         x_mm = msg.pose.pose.position.x * 1000
@@ -270,6 +298,16 @@ class RoutingNode(Node):
         self._approach_goal_theta = theta
         self._goal_retry_count = 0
         self._nav_failure_retry_count = 0
+
+        wp = self._waypoints.get(self._current_goal_name, {})
+        if wp.get("yagura_correction"):
+            self._yagura_correction_applied = False
+
+        if self._current_goal_name == "ring_pickup_1":
+            self._set_mppi_critics(MPPI_RING_PICKUP_1)
+        else:
+            self._set_mppi_critics(MPPI_DEFAULT)
+
         self._send_goal_impl(x, y, theta)
 
     def _send_goal_impl(self, x: float, y: float, theta: float) -> None:
@@ -383,14 +421,15 @@ class RoutingNode(Node):
             return
 
         wp = self._waypoints.get(self._current_goal_name, {})
+        preconditions = wp.get("preconditions", [])
         on_arrive = wp.get("on_arrive", [])
 
-        if on_arrive:
+        if preconditions or on_arrive:
             self._state = "SEQUENCE"
             self._sequence_abort.clear()
             t = threading.Thread(
                 target=self._run_on_arrive_sequence,
-                args=(on_arrive, self._on_sequence_done),
+                args=(preconditions, on_arrive, self._on_sequence_done),
                 daemon=True,
             )
             self._sequence_thread = t
@@ -398,7 +437,104 @@ class RoutingNode(Node):
         else:
             self._on_sequence_done()
 
-    def _run_on_arrive_sequence(self, actions: list, done_callback) -> None:
+    def _check_preconditions(self, preconditions: list) -> bool:
+        """preconditions を検証し、不一致なら自動修正する。成功で True、失敗で False。"""
+        for pre in preconditions:
+            if self._sequence_abort.is_set():
+                return False
+
+            target = pre.get("target", "")
+            control_type = pre.get("control_type", "")
+            expected_str = pre.get("expected", "")
+            correct_action = pre.get("correct_action", "")
+            correct_wait = pre.get("correct_wait", "")
+            timeout = float(pre.get("timeout", 10.0))
+
+            value_map = self._get_value_map(target, control_type)
+            if value_map is None or expected_str not in value_map:
+                self._abort_sequence_with_error(
+                    f"precondition: invalid target/control_type/expected: "
+                    f"{target}/{control_type}/{expected_str}"
+                )
+                return False
+
+            expected_val = value_map[expected_str]
+
+            # 最新の hand_feedback を確認
+            with self._hand_fb_lock:
+                msgs = list(self._hand_fb_list)
+            if not msgs:
+                self.get_logger().info(
+                    f"precondition: hand_feedback 未受信、スキップ ({target}.{control_type})"
+                )
+                continue
+
+            current_val = self._read_fb_field(msgs[-1], target, control_type)
+            if current_val == expected_val:
+                self.get_logger().info(
+                    f"precondition OK: {target}.{control_type}={expected_str}"
+                )
+                continue
+
+            # 不一致 → 自動修正
+            self.get_logger().warn(
+                f"precondition MISMATCH: {target}.{control_type} "
+                f"expected={expected_str}, correcting with {correct_action}"
+            )
+
+            # hand_control コマンド送信
+            cmd = {
+                "type": "hand_control",
+                "target": target,
+                "control_type": control_type,
+                "action": correct_action,
+            }
+            with self._hand_fb_lock:
+                self._hand_fb_list.clear()
+            self._pub_rx.publish(String(data=json.dumps(cmd)))
+
+            # correct_wait の値を待つ
+            wait_map = self._get_value_map(target, control_type)
+            if wait_map is None or correct_wait not in wait_map:
+                self._abort_sequence_with_error(
+                    f"precondition: invalid correct_wait: "
+                    f"{target}/{control_type}/{correct_wait}"
+                )
+                return False
+            wait_val = wait_map[correct_wait]
+
+            deadline = time.monotonic() + timeout
+            interval = 0.05
+            while time.monotonic() < deadline:
+                if self._sequence_abort.is_set():
+                    return False
+                with self._hand_fb_lock:
+                    fb_msgs = list(self._hand_fb_list)
+                for fb in fb_msgs:
+                    if self._read_fb_field(fb, target, control_type) == wait_val:
+                        self.get_logger().info(
+                            f"precondition corrected: {target}.{control_type}={correct_wait}"
+                        )
+                        break
+                else:
+                    time.sleep(interval)
+                    continue
+                break
+            else:
+                self._abort_sequence_with_error(
+                    f"precondition correction timeout: {target}.{control_type}={correct_wait} "
+                    f"({timeout}s)"
+                )
+                return False
+
+        return True
+
+    def _run_on_arrive_sequence(self, preconditions: list, actions: list, done_callback) -> None:
+        if preconditions and self._auto_seq_started_midway:
+            self._auto_seq_started_midway = False
+            if not self._check_preconditions(preconditions):
+                return
+
         for act in actions:
             if self._sequence_abort.is_set():
                 return
@@ -499,38 +635,94 @@ class RoutingNode(Node):
                 if target.startswith("ring_"):
                     grip_fail_val = _RING_STATE_MAP["grip_fail"]
 
-                deadline = time.monotonic() + timeout
+                retry_on_grip_fail = act.get("retry_on_grip_fail", False)
+                max_retries = int(act.get("max_retries", 0))
+                attempt = 0
                 interval = 0.05
-                while time.monotonic() < deadline:
-                    if self._sequence_abort.is_set():
-                        return
-                    with self._hand_fb_lock:
-                        msgs = list(self._hand_fb_list)
-                    found = False
-                    grip_fail_detected = False
-                    for fb in msgs:
-                        if self._read_fb_field(fb, target, control_type) == expected:
-                            found = True
-                            break
-                        if grip_fail_val is not None:
-                            # pos 待ちでも state 待ちでも state フィールドを直接参照
-                            if self._read_fb_field(fb, target, "state") == grip_fail_val:
-                                grip_fail_detected = True
+
+                while True:
+                    deadline = time.monotonic() + timeout
+                    result = None
+
+                    while time.monotonic() < deadline:
+                        if self._sequence_abort.is_set():
+                            return
+                        with self._hand_fb_lock:
+                            msgs = list(self._hand_fb_list)
+                        found = False
+                        grip_fail_detected = False
+                        for fb in msgs:
+                            if self._read_fb_field(fb, target, control_type) == expected:
+                                found = True
                                 break
-                    if found:
+                            if grip_fail_val is not None:
+                                if self._read_fb_field(fb, target, "state") == grip_fail_val:
+                                    grip_fail_detected = True
+                                    break
+                        if found:
+                            result = "ok"
+                            break
+                        if grip_fail_detected:
+                            result = "grip_fail"
+                            break
+                        time.sleep(interval)
+                    else:
+                        result = "timeout"
+
+                    if result == "ok":
                         break
-                    if grip_fail_detected:
+
+                    if result == "grip_fail":
+                        if retry_on_grip_fail and attempt < max_retries:
+                            attempt += 1
+                            self.get_logger().warn(
+                                f"wait_actuator: {target} grip_fail, "
+                                f"retry {attempt}/{max_retries}"
+                            )
+                            close_done_val = _RING_STATE_MAP["close_done"]
+                            with self._hand_fb_lock:
+                                self._hand_fb_list.clear()
+                            close_deadline = time.monotonic() + timeout
+                            close_ok = False
+                            while time.monotonic() < close_deadline:
+                                if self._sequence_abort.is_set():
+                                    return
+                                with self._hand_fb_lock:
+                                    close_msgs = list(self._hand_fb_list)
+                                for fb in close_msgs:
+                                    if self._read_fb_field(fb, target, "state") == close_done_val:
+                                        close_ok = True
+                                        break
+                                if close_ok:
+                                    break
+                                time.sleep(interval)
+                            if not close_ok:
+                                self._abort_sequence_with_error(
+                                    f"wait_actuator: {target} retry close_done timeout"
+                                )
+                                return
+                            cmd = {
+                                "type": "hand_control",
+                                "target": target,
+                                "control_type": "state",
+                                "action": "open",
+                            }
+                            with self._hand_fb_lock:
+                                self._hand_fb_list.clear()
+                            self._pub_rx.publish(String(data=json.dumps(cmd)))
+                            continue
                         self._abort_sequence_with_error(
                             f"wait_actuator: {target} grip_fail detected"
+                            + (f" (after {attempt} retries)" if attempt > 0 else "")
                         )
                         return
-                    time.sleep(interval)
-                else:
-                    self._abort_sequence_with_error(
-                        f"wait_actuator: {target}.{control_type}={value_str} "
-                        f"timeout ({timeout}s)"
-                    )
-                    return
+
+                    if result == "timeout":
+                        self._abort_sequence_with_error(
+                            f"wait_actuator: {target}.{control_type}={value_str} "
+                            f"timeout ({timeout}s)"
+                        )
+                        return
         done_callback()
 
     def _get_value_map(self, target: str, control_type: str) -> dict | None:
@@ -566,12 +758,17 @@ class RoutingNode(Node):
             })))
             self._auto_seq_index += 1
             if self._auto_seq_index < len(self._auto_seq_names):
-                # 壁密着 waypoint から次へ向かう前に後退して inscribed ゾーンを脱出
-                t = threading.Thread(
-                    target=self._back_off_and_advance,
-                    daemon=True,
-                )
-                t.start()
+                need_back_off = ("pickup" in self._current_goal_name or "release" in self._current_goal_name) and "_via" not in self._current_goal_name
+                if need_back_off:
+                    t = threading.Thread(
+                        target=self._back_off_and_advance,
+                        daemon=True,
+                    )
+                    t.start()
+                else:
+                    self._clear_local_costmap()
+                    self._clear_global_costmap()
+                    self._advance_auto_sequence()
                 return
             else:
                 self._auto_seq_running = False
@@ -657,6 +854,7 @@ class RoutingNode(Node):
 
         self._auto_seq_running = True
         self._auto_seq_index = from_index
+        self._auto_seq_started_midway = from_index > 0
         self._sequence_abort.clear()
 
         # from_index=0 でも initialpose を publish して AMCL 収束を待ってから開始
@@ -740,6 +938,27 @@ class RoutingNode(Node):
         msg.pose.covariance[0] = 0.25   # x
         msg.pose.covariance[7] = 0.25   # y
         msg.pose.covariance[35] = 0.04  # yaw
+        self._pub_initial_pose.publish(msg)
+
+    def _publish_initial_pose_from_tf(self) -> None:
+        try:
+            tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
+        except Exception as e:
+            self.get_logger().warn(f"initialpose from TF failed: {e}")
+            return
+
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        msg.header.stamp = (
+            self.get_clock().now() - rclpy.duration.Duration(seconds=0.5)
+        ).to_msg()
+        msg.pose.pose.position.x = tf.transform.translation.x
+        msg.pose.pose.position.y = tf.transform.translation.y
+        msg.pose.pose.orientation.z = tf.transform.rotation.z
+        msg.pose.pose.orientation.w = tf.transform.rotation.w
+        msg.pose.covariance[0] = 0.10   # x
+        msg.pose.covariance[7] = 0.10   # y
+        msg.pose.covariance[35] = 0.02  # yaw
         self._pub_initial_pose.publish(msg)
 
     def _handle_stop_auto(self) -> None:
@@ -863,42 +1082,73 @@ class RoutingNode(Node):
         dist = math.hypot(dx, dy)
 
         if self._state == "NAVIGATING":
+            self._try_yagura_correction(robot_x, robot_y)
+
             if dist <= DIRECT_APPROACH_DIST:
                 self.get_logger().info(
                     f"Direct approach activated (dist={dist:.3f}m)"
                 )
                 self._state = "DIRECT_APPROACH"
+                self._set_mppi_critics(MPPI_DEFAULT)
                 if self._goal_handle:
                     self._goal_handle.cancel_goal_async()
                     self._goal_handle = None
                 self._set_amcl_direct_approach_params()
                 self._publish_initialpose_once()
+                self._fire_pre_arrive()
+                self._run_direct_approach_step(tf, goal_x, goal_y, dist)
                 return
 
             return
 
+        self._run_direct_approach_step(tf, goal_x, goal_y, dist)
+
+    def _fire_pre_arrive(self) -> None:
+        wp = self._waypoints.get(self._current_goal_name, {})
+        pre_arrive = wp.get("pre_arrive", [])
+        if not pre_arrive:
+            return
+        self.get_logger().info(
+            f"pre_arrive: firing {len(pre_arrive)} command(s)"
+        )
+        for act in pre_arrive:
+            if act.get("action") == "hand_control":
+                cmd = {
+                    "type": "hand_control",
+                    "target": act.get("target", ""),
+                    "control_type": act.get("control_type", ""),
+                    "action": act.get("action_value", ""),
+                }
+                self._pub_rx.publish(String(data=json.dumps(cmd)))
+
+    def _run_direct_approach_step(self, tf, goal_x: float, goal_y: float, dist: float) -> None:
+        robot_x = tf.transform.translation.x
+        robot_y = tf.transform.translation.y
         qz = tf.transform.rotation.z
         qw = tf.transform.rotation.w
         yaw = 2.0 * math.atan2(qz, qw)
 
-        # ゴールへの方向ベクトルを base_link 座標系に変換
+        dx = goal_x - robot_x
+        dy = goal_y - robot_y
+
         cos_yaw = math.cos(-yaw)
         sin_yaw = math.sin(-yaw)
         dx_local = cos_yaw * dx - sin_yaw * dy
         dy_local = sin_yaw * dx + cos_yaw * dy
 
-        # 角度誤差
         yaw_error = math.atan2(
             math.sin(self._approach_goal_theta - yaw),
             math.cos(self._approach_goal_theta - yaw),
         )
 
-        # LiDAR 前方距離取得
         approach_angle = math.atan2(dy_local, dx_local)
         lidar_dist = self._lidar_forward_min_dist(approach_angle)
 
-        # 停止判定: AMCL or LiDAR どちらかで止まる
-        amcl_reached = dist <= GOAL_REACHED_DIST and abs(yaw_error) <= YAW_TOLERANCE
+        wp = self._waypoints.get(self._current_goal_name, {})
+        goal_dist_tol = float(wp.get("tolerance_dist", GOAL_REACHED_DIST))
+        goal_yaw_tol = float(wp.get("tolerance_yaw", YAW_TOLERANCE))
+
+        amcl_reached = dist <= goal_dist_tol and abs(yaw_error) <= goal_yaw_tol
         lidar_reached = lidar_dist is not None and lidar_dist <= LIDAR_STOP_DIST
 
         if amcl_reached or lidar_reached:
@@ -914,14 +1164,14 @@ class RoutingNode(Node):
             self._approach_goal_xy = None
             self._restore_amcl_default_params()
 
-            wp = self._waypoints.get(self._current_goal_name, {})
+            preconditions = wp.get("preconditions", [])
             on_arrive = wp.get("on_arrive", [])
-            if on_arrive:
+            if preconditions or on_arrive:
                 self._state = "SEQUENCE"
                 self._sequence_abort.clear()
                 t = threading.Thread(
                     target=self._run_on_arrive_sequence,
-                    args=(on_arrive, self._on_sequence_done),
+                    args=(preconditions, on_arrive, self._on_sequence_done),
                     daemon=True,
                 )
                 self._sequence_thread = t
@@ -930,7 +1180,6 @@ class RoutingNode(Node):
                 self._on_sequence_done()
             return
 
-        # P 制御: 並進速度
         vx = KP_POS * dx_local
         vy = KP_POS * dy_local
         speed = math.hypot(vx, vy)
@@ -938,10 +1187,8 @@ class RoutingNode(Node):
             vx = vx / speed * DIRECT_APPROACH_SPEED
             vy = vy / speed * DIRECT_APPROACH_SPEED
 
-        # P 制御: 角速度
         omega = max(-MAX_OMEGA, min(MAX_OMEGA, KP_YAW * yaw_error))
 
-        # 逆運動学（vy に 1.35x スリップ補償）
         vy_c = vy * 1.35
         v_fl = +vx - vy_c - G * omega
         v_fr = -vx - vy_c - G * omega
@@ -951,7 +1198,6 @@ class RoutingNode(Node):
         rpms = [v * MS_TO_RPM for v in (v_fl, v_fr, v_rl, v_rr)]
         max_abs = max(abs(r) for r in rpms)
 
-        # 精密位置決め段階なので MIN_RPM 底上げは行わない（P 制御が速度を決める）
         if max_abs > MAX_RPM:
             scale = MAX_RPM / max_abs
             rpms = [r * scale for r in rpms]
@@ -990,6 +1236,20 @@ class RoutingNode(Node):
             return
         self._clear_global_costmap_client.call_async(ClearEntireCostmap.Request())
 
+    def _compute_ring_pickup_back_off_direction(self) -> float:
+        """ring_pickup ウェイポイントの back-off 方向（map 座標系）を返す。
+        blue コートは南西（-3π/4）、red コートは南東（-π/4）。"""
+        if self._current_court == "red":
+            return -math.pi / 4.0
+        return -3.0 * math.pi / 4.0
+
+    def _compute_release_back_off_direction(self) -> float:
+        """release ウェイポイントの back-off 方向（map 座標系）を返す。
+        blue コートは東（0 rad）、red コートは西（π rad）。"""
+        if self._current_court == "red":
+            return math.pi
+        return 0.0
+
     def _compute_back_off_direction(self) -> float | None:
         """LiDAR 近傍障害物の加重平均方向から、逆方向（base_link 座標系）を算出する。
 
@@ -1027,15 +1287,12 @@ class RoutingNode(Node):
         LiDAR 近傍障害物の加重平均逆方向に後退して
         inscribed ゾーンを脱出してから Nav2 ゴールを送信する。
         """
-        back_off_local = self._compute_back_off_direction()
-
         try:
             tf = self._tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time())
         except Exception:
             self.get_logger().warn("Back-off: TF not available, skipping back-off")
             self._clear_local_costmap()
             self._clear_global_costmap()
-            time.sleep(1.0)
             self._advance_auto_sequence()
             return
 
@@ -1045,16 +1302,20 @@ class RoutingNode(Node):
         qw = tf.transform.rotation.w
         yaw = 2.0 * math.atan2(qz, qw)
 
-        if back_off_local is not None:
-            # base_link → map 座標系に変換（back_off_local は既に逆方向）
-            back_dir = yaw + back_off_local
+        if "release" in self._current_goal_name:
+            back_dir = self._compute_release_back_off_direction()
+        elif "ring_pickup" in self._current_goal_name:
+            back_dir = self._compute_ring_pickup_back_off_direction()
         else:
-            # LiDAR 取得不可: waypoint theta の逆方向にフォールバック
-            wp = self._waypoints.get(self._current_goal_name, {})
-            _, _, theta = self._apply_court_transform(
-                wp.get("x", 0), wp.get("y", 0), wp.get("theta", 0)
-            )
-            back_dir = theta + math.pi
+            back_off_local = self._compute_back_off_direction()
+            if back_off_local is not None:
+                back_dir = yaw + back_off_local
+            else:
+                wp = self._waypoints.get(self._current_goal_name, {})
+                _, _, theta = self._apply_court_transform(
+                    wp.get("x", 0), wp.get("y", 0), wp.get("theta", 0)
+                )
+                back_dir = theta + math.pi
 
         target_x = robot_x + WALL_BACK_OFF_DIST * math.cos(back_dir)
         target_y = robot_y + WALL_BACK_OFF_DIST * math.sin(back_dir)
@@ -1063,6 +1324,11 @@ class RoutingNode(Node):
             f"Back-off from wall: ({robot_x:.2f},{robot_y:.2f}) → "
             f"({target_x:.2f},{target_y:.2f})"
         )
+
+        # back-off 開始前に次のゴールを Nav2 に送信（プランニングを並行実行）
+        self._clear_local_costmap()
+        self._clear_global_costmap()
+        self._advance_auto_sequence()
 
         deadline = time.monotonic() + BACK_OFF_TIMEOUT
         dt = 0.05
@@ -1120,12 +1386,9 @@ class RoutingNode(Node):
             self.get_logger().warn("Back-off timeout, proceeding anyway")
 
         self._publish_wheel_rpms(0.0, 0.0, 0.0, 0.0)
-
-        self._publish_initial_pose_at_waypoint(self._current_goal_name)
+        self._publish_initial_pose_from_tf()
         self._clear_local_costmap()
         self._clear_global_costmap()
-        time.sleep(1.0)
-        self._advance_auto_sequence()
 
     def _set_mppi_time_steps(self, steps: int) -> None:
         if steps == self._current_time_steps:
@@ -1146,6 +1409,144 @@ class RoutingNode(Node):
         future.add_done_callback(
             lambda f: self.get_logger().info(f"MPPI time_steps → {steps}")
         )
+
+    def _set_mppi_critics(self, params: dict) -> None:
+        if not self._set_params_client.service_is_ready():
+            self.get_logger().warn("controller_server set_parameters service not ready")
+            return
+        param_list = []
+        for name, value in params.items():
+            p = Parameter()
+            p.name = name
+            if isinstance(value, bool):
+                p.value = ParameterValue(
+                    type=ParameterType.PARAMETER_BOOL, bool_value=value
+                )
+            elif isinstance(value, int):
+                p.value = ParameterValue(
+                    type=ParameterType.PARAMETER_INTEGER, integer_value=value
+                )
+            else:
+                p.value = ParameterValue(
+                    type=ParameterType.PARAMETER_DOUBLE, double_value=float(value)
+                )
+            param_list.append(p)
+        req = SetParameters.Request(parameters=param_list)
+        future = self._set_params_client.call_async(req)
+        future.add_done_callback(
+            lambda f: self.get_logger().info(f"MPPI critics updated: {list(params.keys())}")
+        )
+
+    def _try_yagura_correction(self, robot_x: float, robot_y: float) -> None:
+        if self._yagura_correction_applied:
+            return
+
+        wp = self._waypoints.get(self._current_goal_name, {})
+        yc = wp.get("yagura_correction")
+        if yc is None:
+            return
+        if self._approach_goal_xy is None or self._pending_goal_xyz is None:
+            return
+
+        goal_x, goal_y = self._approach_goal_xy
+        dist_to_goal = math.hypot(goal_x - robot_x, goal_y - robot_y)
+        if dist_to_goal > YAGURA_CORRECTION_DIST:
+            return
+
+        with self._yagura_pos_lock:
+            yp0 = self._yagura_pos
+            yp1 = self._yagura_pos_1
+
+        detected = []
+        for yp in (yp0, yp1):
+            if yp is None:
+                continue
+            try:
+                tf = self._tf_buffer.lookup_transform(
+                    "map", yp.header.frame_id, rclpy.time.Time()
+                )
+            except Exception:
+                continue
+            q = tf.transform.rotation
+            yaw = math.atan2(
+                2.0 * (q.w * q.z + q.x * q.y),
+                1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+            )
+            cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+            tx, ty = tf.transform.translation.x, tf.transform.translation.y
+            px = cos_y * yp.point.x - sin_y * yp.point.y + tx
+            py = sin_y * yp.point.x + cos_y * yp.point.y + ty
+            detected.append((px, py))
+
+        if not detected:
+            return
+
+        wp_x, wp_y, wp_theta = wp["x"], wp["y"], wp["theta"]
+        wp_x, wp_y, wp_theta = self._apply_court_transform(wp_x, wp_y, wp_theta)
+        cos_t = math.cos(wp_theta)
+        sin_t = math.sin(wp_theta)
+
+        expected = []
+        for off in yc.get("offsets", []):
+            x_body, y_body = off[0], off[1]
+            ex = wp_x + cos_t * x_body - sin_t * y_body
+            ey = wp_y + sin_t * x_body + cos_t * y_body
+            expected.append((ex, ey))
+
+        if not expected:
+            return
+
+        corrections = []
+        used_expected = set()
+        for dx, dy in detected:
+            best_idx = -1
+            best_dist = float("inf")
+            for i, (ex, ey) in enumerate(expected):
+                if i in used_expected:
+                    continue
+                d = math.hypot(dx - ex, dy - ey)
+                if d < best_dist:
+                    best_dist = d
+                    best_idx = i
+            if best_idx >= 0 and best_dist < 1.0:
+                ex, ey = expected[best_idx]
+                corrections.append((dx - ex, dy - ey))
+                used_expected.add(best_idx)
+
+        if not corrections:
+            return
+
+        corr_x = sum(c[0] for c in corrections) / len(corrections)
+        corr_y = sum(c[1] for c in corrections) / len(corrections)
+        corr_mag = math.hypot(corr_x, corr_y)
+
+        if corr_mag > YAGURA_CORRECTION_MAX:
+            self.get_logger().warn(
+                f"Yagura correction too large ({corr_mag:.3f}m), skipping"
+            )
+            self._yagura_correction_applied = True
+            return
+
+        orig_x, orig_y, orig_theta = self._pending_goal_xyz
+        new_x = orig_x + corr_x
+        new_y = orig_y + corr_y
+
+        self.get_logger().info(
+            f"Yagura correction applied: ({corr_x:+.3f}, {corr_y:+.3f})m "
+            f"from {len(corrections)} yagura(s), "
+            f"goal ({orig_x:.3f},{orig_y:.3f}) → ({new_x:.3f},{new_y:.3f})"
+        )
+
+        self._yagura_correction_applied = True
+        self._pending_goal_xyz = (new_x, new_y, orig_theta)
+        self._approach_goal_xy = (new_x, new_y)
+
+        if self._goal_handle:
+            self._goal_handle.cancel_goal_async()
+            self._goal_handle = None
+        self._goal_retry_count = 0
+        self._nav_failure_retry_count = 0
+        self._send_goal_impl(new_x, new_y, orig_theta)
 
     def _set_amcl_params(self, params: dict) -> None:
         if not self._amcl_params_client.service_is_ready():
