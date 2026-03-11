@@ -588,11 +588,11 @@ class RoutingNode(Node):
                 px = cos_y * yagura_pos.point.x - sin_y * yagura_pos.point.y + tx
                 py = sin_y * yagura_pos.point.x + cos_y * yagura_pos.point.y + ty
 
-                # 西ハンド位置: 櫓がロボット北0.14m・西0.35mに来るよう配置
-                # → ロボット中心は櫓の南0.14m・東0.35mに止まる
-                hand_offset_x = float(act.get("hand_offset_x", 0.35))  # 西方向オフセット[m]
-                hand_offset_y = float(act.get("hand_offset_y", 0.14))  # 北方向オフセット[m]
-                goal_x = px + hand_offset_x
+                hand_offset_x = float(act.get("hand_offset_x", 0.35))
+                hand_offset_y = float(act.get("hand_offset_y", 0.14))
+                # 赤コートでは櫓の西側（-X）に配置する必要がある
+                court_sign = -1.0 if self._current_court == "red" else 1.0
+                goal_x = px + court_sign * hand_offset_x
                 goal_y = py - hand_offset_y
                 goal_theta = -math.pi / 2.0
 
@@ -1486,9 +1486,12 @@ class RoutingNode(Node):
         cos_t = math.cos(wp_theta)
         sin_t = math.sin(wp_theta)
 
+        # 赤コートではY軸対称ミラーにより、櫓はロボットの逆側（body +Y）に位置する
+        court_sign = -1.0 if self._current_court == "red" else 1.0
+
         expected = []
         for off in yc.get("offsets", []):
-            x_body, y_body = off[0], off[1]
+            x_body, y_body = off[0], court_sign * off[1]
             ex = wp_x + cos_t * x_body - sin_t * y_body
             ey = wp_y + sin_t * x_body + cos_t * y_body
             expected.append((ex, ey))
