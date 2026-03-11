@@ -184,6 +184,13 @@ class RoutingNode(Node):
         self._approach_done_event: threading.Event | None = None
         self._approach_success: bool = False
 
+        self._ring_align_result: dict | None = None
+        self._ring_align_lock = threading.Lock()
+        self._pub_ring_align = self.create_publisher(String, "ring_align_cmd", 10)
+        self._sub_ring_align = self.create_subscription(
+            String, "ring_align_status", self._on_ring_align_status, 10
+        )
+
         self._sequence_abort = threading.Event()
         self._sequence_thread: threading.Thread | None = None
         self._auto_seq_running: bool = False
@@ -207,6 +214,14 @@ class RoutingNode(Node):
     def _on_yagura_pos_1(self, msg: PointStamped) -> None:
         with self._yagura_pos_lock:
             self._yagura_pos_1 = msg
+
+    def _on_ring_align_status(self, msg: String) -> None:
+        try:
+            result = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        with self._ring_align_lock:
+            self._ring_align_result = result
 
     def _on_odom(self, msg: Odometry) -> None:
         x_mm = msg.pose.pose.position.x * 1000
@@ -723,6 +738,48 @@ class RoutingNode(Node):
                             f"timeout ({timeout}s)"
                         )
                         return
+
+            elif action_type == "ring_align":
+                color = act.get("color", "any")
+                timeout = float(act.get("timeout", 5.0))
+
+                with self._ring_align_lock:
+                    self._ring_align_result = None
+
+                cmd = json.dumps({"action": "start", "color": color, "timeout": timeout})
+                self._pub_ring_align.publish(String(data=cmd))
+                self.get_logger().info(f"ring_align: start (color={color}, timeout={timeout}s)")
+
+                deadline = time.monotonic() + timeout + 2.0
+                interval = 0.05
+                while time.monotonic() < deadline:
+                    if self._sequence_abort.is_set():
+                        self._pub_ring_align.publish(
+                            String(data=json.dumps({"action": "cancel"}))
+                        )
+                        return
+                    with self._ring_align_lock:
+                        result = self._ring_align_result
+                    if result is not None:
+                        if result.get("success"):
+                            self.get_logger().info(
+                                f"ring_align success: offset=("
+                                f"{result.get('offset_x', 0):.3f}, "
+                                f"{result.get('offset_y', 0):.3f})m"
+                            )
+                            break
+                        else:
+                            self.get_logger().warn(
+                                f"ring_align failed: {result.get('message', 'unknown')}"
+                            )
+                            break
+                    time.sleep(interval)
+                else:
+                    self._pub_ring_align.publish(
+                        String(data=json.dumps({"action": "cancel"}))
+                    )
+                    self.get_logger().warn("ring_align: routing timeout")
+
         done_callback()
 
     def _get_value_map(self, target: str, control_type: str) -> dict | None:

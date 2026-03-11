@@ -160,6 +160,9 @@ waypoints:
         control_type: "pos"
         value: "pickup_done"
         timeout: 10.0
+      - action: ring_align
+        color: "any"
+        timeout: 5.0
       - action: hand_control
         target: "ring_1"
         control_type: "state"
@@ -376,6 +379,9 @@ waypoints:
         control_type: "pos"
         value: "pickup_done"
         timeout: 10.0
+      - action: ring_align
+        color: "any"
+        timeout: 5.0
       - action: hand_control
         target: "ring_1"
         control_type: "state"

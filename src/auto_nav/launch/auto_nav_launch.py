@@ -23,6 +23,7 @@
   - map_server             (合成 PGM マップ → /map, lifecycle)
   - amcl                   (既知マップでのパーティクルフィルタ自己位置推定, lifecycle)
   - lifecycle_manager      (map_server + amcl + Nav2 ノードの統合ライフサイクル管理)
+  - yagura_position_node   (LiDAR → 櫓 Φ114mm 座標検出)
   - routing_node           (Bluetooth → NavigateToPose, nav_mode 切り替え)
   - robot_control          (Bluetooth 手動操縦 + ESP32 制御)
   - bt_communication       (Bluetooth GATT サーバー)
@@ -299,6 +300,24 @@ def generate_launch_description():
         remappings=_nav2_remaps,
     )
 
+    yagura_position_node = Node(
+        package="auto_nav",
+        executable="launch_yagura_position.py",
+        name="yagura_position",
+        output="screen",
+        emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
+    )
+
+    ring_alignment_node = Node(
+        package="auto_nav",
+        executable="launch_ring_alignment.py",
+        name="ring_alignment_node",
+        output="screen",
+        emulate_tty=True,
+        ros_arguments=["--log-level", _log_level, "--log-level", "rcl:=warn", "--log-level", "rclpy:=warn"],
+    )
+
     routing_node = Node(
         package="auto_nav",
         executable="launch_routing.py",
@@ -368,6 +387,8 @@ def generate_launch_description():
             bt_navigator_node,
             # EKF が odom→base_link TF を発行するまで lifecycle 遷移を遅延（IMU キャリブ ~2s + マージン）
             TimerAction(period=3.0, actions=[lifecycle_manager_node]),
+            yagura_position_node,
+            ring_alignment_node,
             routing_node,
             robot_control_node,
             bt_communication_node,
