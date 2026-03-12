@@ -730,11 +730,11 @@ class RoutingNode(Node):
                                 self._hand_fb_list.clear()
                             self._pub_rx.publish(String(data=json.dumps(cmd)))
                             continue
-                        self._abort_sequence_with_error(
-                            f"wait_actuator: {target} grip_fail detected"
+                        self.get_logger().warn(
+                            f"wait_actuator: {target} grip_fail, continuing sequence"
                             + (f" (after {attempt} retries)" if attempt > 0 else "")
                         )
-                        return
+                        break
 
                     if result == "timeout":
                         self._abort_sequence_with_error(
