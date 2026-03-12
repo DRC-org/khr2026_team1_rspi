@@ -405,9 +405,9 @@ waypoints:
     preconditions:
       - target: "yagura_1"
         control_type: "pos"
-        expected: "up_done"
-        correct_action: "up"
-        correct_wait: "up_done"
+        expected: "down_done"
+        correct_action: "down"
+        correct_wait: "down_done"
         timeout: 10.0
       - target: "yagura_1"
         control_type: "state"

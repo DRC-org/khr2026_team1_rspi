@@ -197,7 +197,6 @@ class RoutingNode(Node):
         self._sequence_thread: threading.Thread | None = None
         self._auto_seq_running: bool = False
         self._auto_seq_index: int = 0
-        self._auto_seq_started_midway: bool = False
 
     def _on_scan(self, msg: LaserScan) -> None:
         with self._scan_lock:
@@ -549,11 +548,6 @@ class RoutingNode(Node):
         return True
 
     def _run_on_arrive_sequence(self, preconditions: list, actions: list, done_callback) -> None:
-        if preconditions and self._auto_seq_started_midway:
-            self._auto_seq_started_midway = False
-            if not self._check_preconditions(preconditions):
-                return
-
         for act in actions:
             if self._sequence_abort.is_set():
                 return
@@ -1034,7 +1028,6 @@ class RoutingNode(Node):
 
         self._auto_seq_running = True
         self._auto_seq_index = from_index
-        self._auto_seq_started_midway = from_index > 0
         self._sequence_abort.clear()
 
         # from_index=0 でも initialpose を publish して AMCL 収束を待ってから開始
@@ -1046,18 +1039,12 @@ class RoutingNode(Node):
         t.start()
 
     def _relocate_and_start(self, from_index: int) -> None:
-        if from_index == 0:
-            # シーケンス開始: コート別スタート位置で AMCL を初期化
-            self._publish_start_pose(self._current_court)
-        else:
-            # 手動移動後のリローカライズ: 移動先ウェイポイント位置で初期化
-            wp_name = self._auto_seq_names[from_index]
-            self._publish_initial_pose_at_waypoint(wp_name)
+        # 常に home 位置（コート別スタート位置）で AMCL を初期化
+        self._publish_start_pose(self._current_court)
 
         wp_name = self._auto_seq_names[from_index]
 
         # map→odom TF が確立されるまで待機（AMCL ローカライズ完了 + Nav2 コストマップ更新を保証）
-        # 固定秒数ではなく実際の TF 存在チェックで判定するため、マップ読み込みの遅延に対応できる
         _WAIT_TIMEOUT = 30.0
         _PUBLISH_INTERVAL = 1.0
         deadline = time.monotonic() + _WAIT_TIMEOUT
@@ -1092,6 +1079,29 @@ class RoutingNode(Node):
             self.get_logger().warn("map→odom TF not available after timeout, proceeding anyway")
         else:
             self.get_logger().info("map→odom TF confirmed, starting navigation")
+
+        if self._sequence_abort.is_set():
+            return
+
+        # home の on_arrive を実行してアクチュエータを初期状態にリセット
+        home_wp = self._waypoints.get("home", {})
+        home_actions = home_wp.get("on_arrive", [])
+        if home_actions:
+            self.get_logger().info("Running home on_arrive to reset actuators...")
+            self._state = "SEQUENCE"
+            self._sequence_abort.clear()
+            reset_done = threading.Event()
+
+            def on_reset_done():
+                reset_done.set()
+
+            self._run_on_arrive_sequence([], home_actions, on_reset_done)
+
+            if not reset_done.is_set():
+                self.get_logger().warn("Home on_arrive failed or aborted")
+                return
+
+            self.get_logger().info("Actuator reset complete")
 
         if self._sequence_abort.is_set():
             return
@@ -1646,13 +1656,19 @@ class RoutingNode(Node):
             yp0 = self._yagura_pos
             yp1 = self._yagura_pos_1
 
+        now = self.get_clock().now()
         detected = []
         for yp in (yp0, yp1):
             if yp is None:
                 continue
+            age = (now - rclpy.time.Time.from_msg(yp.header.stamp)).nanoseconds / 1e9
+            if age > 1.0:
+                continue
             try:
                 tf = self._tf_buffer.lookup_transform(
-                    "map", yp.header.frame_id, rclpy.time.Time()
+                    "map", yp.header.frame_id,
+                    rclpy.time.Time.from_msg(yp.header.stamp),
+                    timeout=rclpy.duration.Duration(seconds=0.1),
                 )
             except Exception:
                 continue
