@@ -609,11 +609,11 @@ class RoutingNode(Node):
 
                 hand_offset_x = float(act.get("hand_offset_x", 0.35))
                 hand_offset_y = float(act.get("hand_offset_y", 0.14))
-                # 赤コートでは櫓の西側（-X）に配置する必要がある
+                # 赤コートでは180°回転のため、X方向オフセットを反転し北向きにアプローチ
                 court_sign = -1.0 if self._current_court == "red" else 1.0
                 goal_x = px + court_sign * hand_offset_x
                 goal_y = py - hand_offset_y
-                goal_theta = -math.pi / 2.0
+                goal_theta = math.pi / 2.0 if self._current_court == "red" else -math.pi / 2.0
 
                 # ネスト航行を開始してシーケンススレッドで完了を待つ
                 done_event = threading.Event()
@@ -964,9 +964,9 @@ class RoutingNode(Node):
     def _apply_court_transform(
         self, x: float, y: float, theta: float
     ) -> tuple[float, float, float]:
-        # 赤コートは青コートに対して北南軸（Y軸）対称: X反転
+        # 赤コートは青コートに対して点対称（180°回転）: X反転 + 向き反転
         if self._current_court == "red":
-            return -x, y, math.pi - theta
+            return -x, y, theta + math.pi
         return x, y, theta
 
     def _handle_set_court(self, data: dict) -> None:
@@ -1675,12 +1675,12 @@ class RoutingNode(Node):
         cos_t = math.cos(wp_theta)
         sin_t = math.sin(wp_theta)
 
-        # 赤コートではY軸対称ミラーにより、櫓はロボットの逆側（body +Y）に位置する
+        # 赤コートは180°回転（点対称）のため、ロボットが逆向きになり body X 方向が反転する
         court_sign = -1.0 if self._current_court == "red" else 1.0
 
         expected = []
         for off in yc.get("offsets", []):
-            x_body, y_body = off[0], court_sign * off[1]
+            x_body, y_body = court_sign * off[0], off[1]
             ex = wp_x + cos_t * x_body - sin_t * y_body
             ey = wp_y + sin_t * x_body + cos_t * y_body
             expected.append((ex, ey))
