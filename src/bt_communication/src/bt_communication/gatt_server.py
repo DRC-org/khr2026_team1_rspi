@@ -6,9 +6,13 @@ from typing import Optional
 
 from bumble.att import Attribute
 from bumble.core import AdvertisingData
-from bumble.device import Device
+from bumble.device import (
+    AdvertisingEventProperties,
+    AdvertisingParameters,
+    Device,
+)
 from bumble.gatt import Characteristic, CharacteristicValue, Service
-from bumble.hci import Address
+from bumble.hci import Address, OwnAddressType
 from bumble.transport import open_transport
 
 from .constants import RX_CHARACTERISTIC_UUID, SERVICE_UUID, TX_CHARACTERISTIC_UUID
@@ -29,6 +33,31 @@ class BluetoothGATTServer:
     def set_pending_tx_data(self, data: str):
         """Store latest TX data. Called on event loop via call_soon_threadsafe."""
         self._pending_tx_data = data
+
+    async def _start_advertising(self):
+        """Start or restart advertising with max TX power."""
+        await self.device.stop_advertising()
+        adv_set = await self.device.create_advertising_set(
+            advertising_parameters=AdvertisingParameters(
+                advertising_event_properties=(
+                    AdvertisingEventProperties(
+                        is_connectable=True,
+                        is_scannable=True,
+                        is_legacy=True,
+                    )
+                ),
+                own_address_type=OwnAddressType.RANDOM,
+                advertising_tx_power=29,
+            ),
+            random_address=self.device.random_address,
+            advertising_data=self._advertising_data_bytes,
+            auto_start=True,
+            auto_restart=True,
+        )
+        self.logger.info(
+            f"Advertising started (selected TX power: "
+            f"{adv_set.selected_tx_power} dBm)"
+        )
 
     async def start(self, hci_transport_uri: str = "usb:2357:0604/E848B8C82000"):
         """Start the Bluetooth GATT server"""
@@ -108,15 +137,40 @@ class BluetoothGATTServer:
             service = Service(SERVICE_UUID, [self.tx_char, rx_char])
             self.device.add_service(service)
 
-            # Create advertising data
-            advertising_data = AdvertisingData(
-                [(AdvertisingData.COMPLETE_LOCAL_NAME, bytes(target_name, "utf-8"))]
+            # Store advertising data for reuse
+            self._advertising_data_bytes = bytes(
+                AdvertisingData(
+                    [
+                        (
+                            AdvertisingData.COMPLETE_LOCAL_NAME,
+                            bytes(target_name, "utf-8"),
+                        )
+                    ]
+                )
             )
 
             # Connection handlers
             async def on_connection(connection):
                 self.logger.info(f"Client connected: {connection}")
                 self.connected_clients[connection] = {}
+
+                # 混線環境対策: supervision timeout を延長し、
+                # 一時的な干渉でもすぐに切断されないようにする
+                try:
+                    await connection.update_connection_parameters(
+                        conn_interval_min=24,   # 30ms (24 * 1.25ms)
+                        conn_interval_max=40,   # 50ms (40 * 1.25ms)
+                        conn_latency=0,
+                        supervision_timeout=500, # 5000ms (500 * 10ms)
+                    )
+                    self.logger.info(
+                        "Connection parameters updated "
+                        "(interval=30-50ms, supervision_timeout=5000ms)"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to update connection parameters: {e}"
+                    )
 
                 def on_disconnect(reason):
                     self.logger.info(
@@ -139,20 +193,21 @@ class BluetoothGATTServer:
 
                 # 2 台目以降も接続できるようにアドバタイズを再開
                 if self.device:
-                    await self.device.start_advertising(
-                        advertising_data=bytes(advertising_data), auto_restart=True
-                    )
+                    try:
+                        await self._start_advertising()
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Failed to restart advertising after connection: {e}"
+                        )
 
             self.device.on("connection", on_connection)
 
             self.logger.info(f"Server started: {self.device.name}")
             await self.device.power_on()
 
-            await self.device.start_advertising(
-                advertising_data=bytes(advertising_data), auto_restart=True
-            )
+            await self._start_advertising()
 
-            self.logger.info("Advertising... Waiting for connections")
+            self.logger.info("Waiting for connections")
 
             # Keep server running
             await asyncio.get_running_loop().create_future()
